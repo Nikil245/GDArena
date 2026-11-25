@@ -1,0 +1,355 @@
+"""Provider-agnostic LLM wrapper over the OpenAI-compatible Chat Completions API.
+
+Any provider exposing an OpenAI-compatible endpoint (Groq, OpenAI, Together, OpenRouter,
+Ollama, vLLM, ...) works by changing ``LLM_BASE_URL`` / ``LLM_MODEL`` / the API key.
+
+* 429 rate limits are retried with exponential backoff + jitter, honouring ``Retry-After``.
+* Timeouts, connection errors and 5xx are retried the same way.
+* ``MockLLM`` is an offline stand-in used for tests and for local dev without an API key.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import random
+import re
+import time
+from abc import ABC, abstractmethod
+from email.utils import parsedate_to_datetime
+from functools import lru_cache
+from typing import Any
+
+import httpx
+import openai
+from openai import AsyncOpenAI
+
+from ..config import Settings, get_settings
+
+log = logging.getLogger(__name__)
+
+Message = dict[str, str]
+
+
+class LLMError(RuntimeError):
+    """The LLM call failed (after retries) or returned unusable output."""
+
+
+class LLMRateLimitError(LLMError):
+    """Still rate limited (HTTP 429) after all retries."""
+
+
+class LLMClient(ABC):
+    provider: str = "base"
+    model: str = ""
+
+    @abstractmethod
+    async def chat(
+        self,
+        messages: list[Message],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int = 300,
+        json_mode: bool = False,
+        purpose: str = "generic",
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Return the assistant message text.
+
+        ``purpose`` and ``metadata`` are for logging/tracing (and drive ``MockLLM``);
+        real providers do not send them.
+        """
+
+    async def chat_json(
+        self,
+        messages: list[Message],
+        *,
+        temperature: float = 0.3,
+        max_tokens: int = 400,
+        purpose: str = "generic",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        text = await self.chat(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            json_mode=True,
+            purpose=purpose,
+            metadata=metadata,
+        )
+        return parse_json_object(text)
+
+    async def aclose(self) -> None:  # pragma: no cover - trivial
+        return None
+
+
+class OpenAICompatibleLLM(LLMClient):
+    def __init__(
+        self,
+        *,
+        provider: str,
+        api_key: str,
+        base_url: str,
+        model: str,
+        timeout: float = 30.0,
+        max_retries: int = 5,
+        backoff_base: float = 1.0,
+        backoff_max: float = 30.0,
+        max_concurrency: int = 4,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self.provider = provider
+        self.model = model
+        self._max_retries = max(0, max_retries)
+        self._backoff_base = backoff_base
+        self._backoff_max = backoff_max
+        self._semaphore = asyncio.Semaphore(max(1, max_concurrency))
+        # max_retries=0: retries are handled here so we control backoff and logging.
+        self._client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=0,
+            http_client=http_client,
+        )
+
+    async def chat(
+        self,
+        messages: list[Message],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int = 300,
+        json_mode: bool = False,
+        purpose: str = "generic",
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        use_json = json_mode
+        attempt = 0
+        while True:
+            started = time.monotonic()
+            try:
+                extra: dict[str, Any] = {}
+                if use_json:
+                    extra["response_format"] = {"type": "json_object"}
+                async with self._semaphore:
+                    resp = await self._client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,  # type: ignore[arg-type]
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        **extra,
+                    )
+                content = (resp.choices[0].message.content or "").strip() if resp.choices else ""
+                if not content:
+                    raise LLMError("LLM returned an empty completion")
+                log.debug("LLM %s ok in %.2fs", purpose, time.monotonic() - started)
+                return content
+            except openai.RateLimitError as exc:
+                if attempt >= self._max_retries:
+                    raise LLMRateLimitError(
+                        f"rate limited by {self.provider} after {attempt} retries"
+                    ) from exc
+                delay = self._retry_after(exc) or self._backoff(attempt)
+                log.warning(
+                    "LLM 429 rate limit (%s). Retry %d/%d in %.1fs",
+                    purpose, attempt + 1, self._max_retries, delay,
+                )
+            except (openai.APITimeoutError, openai.APIConnectionError, openai.InternalServerError) as exc:
+                if attempt >= self._max_retries:
+                    raise LLMError(f"LLM unavailable after {attempt} retries: {exc}") from exc
+                delay = self._backoff(attempt)
+                log.warning(
+                    "LLM transient error (%s: %s). Retry %d/%d in %.1fs",
+                    purpose, type(exc).__name__, attempt + 1, self._max_retries, delay,
+                )
+            except openai.BadRequestError as exc:
+                # Some models/providers reject JSON mode, or fail their own JSON validation
+                # (Groq: json_validate_failed). Retry once without it and parse loosely.
+                if use_json:
+                    log.info("LLM rejected JSON mode (%s); retrying without it", purpose)
+                    use_json = False
+                    continue
+                raise LLMError(f"LLM bad request: {exc}") from exc
+            except openai.APIStatusError as exc:
+                raise LLMError(f"LLM API error {exc.status_code}: {exc}") from exc
+            attempt += 1
+            await asyncio.sleep(delay)
+
+    def _backoff(self, attempt: int) -> float:
+        cap = min(self._backoff_max, self._backoff_base * (2**attempt))
+        return cap / 2 + random.uniform(0, cap / 2)
+
+    @staticmethod
+    def _retry_after(exc: openai.APIStatusError) -> float | None:
+        headers = getattr(getattr(exc, "response", None), "headers", None) or {}
+        ms = headers.get("retry-after-ms")
+        if ms:
+            try:
+                return min(60.0, max(0.0, float(ms) / 1000))
+            except ValueError:
+                pass
+        value = headers.get("retry-after")
+        if not value:
+            return None
+        try:
+            seconds = float(value)
+        except ValueError:
+            try:
+                seconds = parsedate_to_datetime(value).timestamp() - time.time()
+            except (TypeError, ValueError):
+                return None
+        # small jitter so concurrent callers don't retry in lock-step
+        return min(60.0, max(0.0, seconds)) + random.uniform(0, 0.25)
+
+    async def aclose(self) -> None:
+        await self._client.close()
+
+
+_FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*|\s*```$")
+
+
+def parse_json_object(text: str) -> dict[str, Any]:
+    """Parse a JSON object from model output, tolerating code fences and surrounding prose."""
+    s = _FENCE_RE.sub("", text.strip()).strip()
+    try:
+        obj = json.loads(s)
+    except json.JSONDecodeError:
+        start, end = s.find("{"), s.rfind("}")
+        if start == -1 or end <= start:
+            raise LLMError(f"no JSON object in LLM response: {text[:200]!r}") from None
+        try:
+            obj = json.loads(s[start : end + 1])
+        except json.JSONDecodeError as exc:
+            raise LLMError(f"invalid JSON in LLM response: {text[:200]!r}") from exc
+    if not isinstance(obj, dict):
+        raise LLMError("expected a JSON object from the LLM")
+    return obj
+
+
+# --------------------------------------------------------------------------------------
+# Offline mock
+# --------------------------------------------------------------------------------------
+
+_MOCK_OPENERS: dict[str, list[str]] = {
+    "aggressive_debater": ["Let me be blunt.", "I strongly disagree with where this is going."],
+    "calm_analyst": ["If we step back for a moment,", "Let's split this into two parts."],
+    "data_driven": ["The numbers tell a clear story.", "Look at the evidence here."],
+    "empathetic": ["I hear the concerns raised so far.", "We should remember the people affected."],
+    "devils_advocate": ["Let me argue the opposite for a second.", "What if the consensus here is wrong?"],
+    "visionary": ["Think ten years ahead.", "There's a huge opportunity we're missing."],
+    "pragmatist": ["Ideas are cheap; execution matters.", "Let's talk about what is actually feasible."],
+    "storyteller": ["My cousin faced exactly this last year.", "Picture a small-town student for a moment."],
+    "consensus_builder": ["We actually agree on more than it seems.", "Let me pull the threads together."],
+    "questioner": ["Here's the question nobody has asked:", "Are we sure about our core assumption?"],
+}
+
+_MOCK_BODIES = [
+    "On {topic}, the real issue is incentives, not intentions. {other} raised a fair point, "
+    "but without accountability any policy will fail in implementation.",
+    "Regarding {topic}, we keep debating extremes. A phased approach with clear checkpoints "
+    "lets us capture the benefits while limiting the risks {other} mentioned.",
+    "Surveys suggest roughly six in ten young professionals feel directly affected by {topic}. "
+    "That makes this a mainstream concern, not a niche debate.",
+    "Building on what {other} said, {topic} looks very different in a metro city compared to a "
+    "village. One-size-fits-all solutions will leave people behind.",
+    "Everyone assumes {topic} is about technology, but it is really about trust. If people don't "
+    "trust the system, even the best design gets rejected.",
+    "Short-term costs dominate this discussion of {topic}, yet the long-term gains in productivity "
+    "and inclusion could outweigh them if we invest in skills first.",
+]
+
+
+class MockLLM(LLMClient):
+    """Deterministic-enough offline LLM. Responds according to ``purpose``."""
+
+    provider = "mock"
+    model = "mock-gd"
+
+    def __init__(self, latency: tuple[float, float] = (0.15, 0.5), seed: int | None = None) -> None:
+        self._latency = latency
+        self._rng = random.Random(seed)
+
+    async def chat(
+        self,
+        messages: list[Message],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int = 300,
+        json_mode: bool = False,
+        purpose: str = "generic",
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        await asyncio.sleep(self._rng.uniform(*self._latency))
+        meta = metadata or {}
+        if purpose == "ai_turn":
+            return self._speech(meta)
+        if purpose == "score":
+            return json.dumps(self._score())
+        if purpose == "report":
+            return json.dumps(self._report())
+        return "OK"
+
+    def _speech(self, meta: dict[str, Any]) -> str:
+        openers = _MOCK_OPENERS.get(meta.get("persona_key", ""), ["I'd like to add a point."])
+        others = [o for o in meta.get("others", []) if o != meta.get("name")] or ["the previous speaker"]
+        other = meta.get("last_speaker") or self._rng.choice(others)
+        if other == meta.get("name"):
+            other = self._rng.choice(others)
+        topic = str(meta.get("topic", "this topic")).rstrip("?.!").lower()
+        body = self._rng.choice(_MOCK_BODIES).format(topic=f"'{topic}'", other=other)
+        return f"{self._rng.choice(openers)} {body}"
+
+    def _score(self) -> dict[str, Any]:
+        r = self._rng
+        return {
+            "relevance": r.randint(5, 9),
+            "clarity": r.randint(5, 9),
+            "content": r.randint(4, 9),
+            "teamwork": r.randint(4, 9),
+            "comment": r.choice(
+                [
+                    "Clear stance; back it with one concrete example next time.",
+                    "Good build-on to the previous speaker, slightly repetitive.",
+                    "Relevant point, but the structure could be tighter.",
+                    "Strong evidence; acknowledge counterpoints to sound more balanced.",
+                ]
+            ),
+        }
+
+    def _report(self) -> dict[str, Any]:
+        return {
+            "strengths": ["Took a clear position early", "Referred to other speakers' points"],
+            "improvements": ["Support claims with specific data", "Summarise the discussion before concluding"],
+            "summary": "A confident contributor who can add more depth with evidence.",
+        }
+
+
+def build_llm(settings: Settings) -> LLMClient:
+    provider = settings.llm_provider.strip().lower()
+    if provider == "mock":
+        return MockLLM()
+    if not settings.api_key:
+        log.warning(
+            "No API key for LLM provider %r (set GROQ_API_KEY or LLM_API_KEY in backend/.env). "
+            "Falling back to the offline MockLLM.",
+            provider,
+        )
+        return MockLLM()
+    return OpenAICompatibleLLM(
+        provider=provider,
+        api_key=settings.api_key,
+        base_url=settings.llm_base_url,
+        model=settings.llm_model,
+        timeout=settings.llm_timeout_seconds,
+        max_retries=settings.llm_max_retries,
+        backoff_base=settings.llm_backoff_base_seconds,
+        backoff_max=settings.llm_backoff_max_seconds,
+        max_concurrency=settings.llm_max_concurrency,
+    )
+
+
+@lru_cache
+def get_llm() -> LLMClient:
+    return build_llm(get_settings())
+
