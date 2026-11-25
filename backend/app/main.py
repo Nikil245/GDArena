@@ -18,6 +18,7 @@ from .core.registry import registry
 from .db import init_db
 from .services.llm import get_llm, verify_provider_models
 from .services.stt import get_stt
+from .services.tts import get_tts, verify_tts_voices
 
 settings = get_settings()
 logging.basicConfig(
@@ -33,8 +34,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     registry.recover_stale_rooms()
     llm = get_llm()
     stt = get_stt()
+    tts = get_tts()
     await verify_provider_models(settings, llm, stt)
-    log.info("LLM provider=%s model=%s | STT provider=%s model=%s", llm.provider, llm.model, stt.name, getattr(stt, "model", None))
+    await verify_tts_voices(tts)
+    log.info(
+        "LLM provider=%s model=%s | STT provider=%s model=%s | TTS provider=%s",
+        llm.provider,
+        llm.model,
+        stt.name,
+        getattr(stt, "model", None),
+        tts.name,
+    )
     yield
     await registry.shutdown()
     await llm.aclose()

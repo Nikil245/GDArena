@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
-from fastapi import APIRouter, File, Form, Query, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Body, File, Form, Query, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import BaseModel, Field
 
 from ..core.errors import GDError
 from ..core.registry import registry
@@ -16,10 +18,24 @@ from ..services import topics
 from ..services.llm import get_llm
 from ..services.personas import ALL_PERSONAS
 from ..services.stt import STTError, VoiceNotSupportedError, get_stt
+from ..services.tts import (
+    DEFAULT_TTS_VOICE,
+    TTSError,
+    get_tts,
+    get_turn_audio_path,
+    mp3_duration_seconds,
+)
 
+log = logging.getLogger(__name__)
 router = APIRouter()
 
 MAX_AUDIO_BYTES = 20 * 1024 * 1024
+
+
+class TtsTestRequest(BaseModel):
+    voice: str | None = Field(default=None, max_length=100)
+    text: str | None = Field(default=None, max_length=300)
+    rate: str | None = Field(default="+0%", max_length=16)
 
 
 def _room_or_404(code: str) -> RoomRuntime:
@@ -33,13 +49,43 @@ def _room_or_404(code: str) -> RoomRuntime:
 async def health() -> dict[str, Any]:
     llm = get_llm()
     stt = get_stt()
+    tts = get_tts()
     return {
         "status": "ok",
         "llm_provider": llm.provider,
         "llm_model": llm.model,
         "stt_provider": stt.name,
         "stt_model": getattr(stt, "model", None),
+        "tts_provider": tts.name,
     }
+
+
+@router.get("/audio/{room_code}/{turn_id}.mp3", tags=["voice"])
+async def get_turn_audio(room_code: str, turn_id: int) -> FileResponse:
+    path = get_turn_audio_path(room_code, turn_id)
+    if path is None:
+        raise GDError("audio_not_found", "Audio clip not found.", 404)
+    return FileResponse(path, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
+
+
+@router.post("/tts/test", tags=["voice"])
+async def test_tts(req: TtsTestRequest | None = Body(default=None)) -> Response:
+    tts = get_tts()
+    voice = (req.voice if req and req.voice else None) or DEFAULT_TTS_VOICE
+    text = (req.text if req and req.text else None) or "Hello! Server-side AI voice playback is working in GDArena."
+    rate = (req.rate if req and req.rate else None) or "+0%"
+    try:
+        mp3_bytes = await tts.synthesize(text, voice=voice, rate=rate)
+    except TTSError as exc:
+        log.error("POST /tts/test failed: %s", exc, exc_info=True)
+        raise GDError("tts_error", str(exc), 502) from exc
+    if not mp3_bytes:
+        raise GDError("tts_disabled", "Server-side TTS is disabled (TTS_PROVIDER=none).", 400)
+    dur = mp3_duration_seconds(mp3_bytes)
+    headers = {"X-TTS-Voice": tts.resolve_voice(voice), "Cache-Control": "no-store"}
+    if dur is not None:
+        headers["X-Audio-Duration"] = str(dur)
+    return Response(content=mp3_bytes, media_type="audio/mpeg", headers=headers)
 
 
 @router.post("/stt", tags=["voice"])

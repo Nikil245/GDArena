@@ -124,6 +124,7 @@ Request schema validation errors return FastAPI's standard `422 Unprocessable En
   "text": "A four-day week works well in knowledge industries if output metrics are clear.",
   "source": "text",
   "audio_url": null,
+  "audio_duration_seconds": null,
   "started_at": "2026-11-25T07:01:05.000Z",
   "ended_at": "2026-11-25T07:01:22.000Z",
   "scores": {
@@ -234,9 +235,35 @@ Server health and active provider info.
   "llm_provider": "groq",
   "llm_model": "openai/gpt-oss-120b",
   "stt_provider": "whisper",
-  "stt_model": "whisper-large-v3-turbo"
+  "stt_model": "whisper-large-v3-turbo",
+  "tts_provider": "edge"
 }
 ```
+
+---
+
+### `GET /audio/{room_code}/{turn_id}.mp3`
+Serve the synthesized MP3 clip for an AI turn.
+
+- **200 OK:** `audio/mpeg` binary stream (`Cache-Control: no-store`).
+- **404 Not Found:** `audio_not_found` (clip does not exist or was cleaned up when the room ended).
+
+---
+
+### `POST /tts/test`
+Synthesize a short MP3 voice sample to verify server-side TTS playback.
+
+- **Request body (optional):**
+```json
+{
+  "voice": "en-IN-NeerjaNeural",
+  "text": "Hello! Server-side AI voice playback is working in GDArena.",
+  "rate": "+0%"
+}
+```
+- **200 OK:** `audio/mpeg` binary stream (`X-TTS-Voice`, `X-Audio-Duration` headers).
+- **400 Bad Request:** `tts_disabled` (`TTS_PROVIDER=none`)
+- **502 Bad Gateway:** `tts_error`
 
 ---
 

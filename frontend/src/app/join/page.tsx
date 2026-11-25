@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { AppHeader } from "@/components/AppHeader";
 import { ApiError, fetchRoom, joinRoom } from "@/lib/api";
-import { unlockSpeech } from "@/lib/speech";
+import { unlockAudio } from "@/lib/speech";
 import { loadSavedName, saveRoomSession } from "@/lib/storage";
 import type { Role, Room } from "@/lib/types";
 
@@ -109,7 +109,7 @@ function JoinRoomContent() {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    unlockSpeech();
+    unlockAudio();
     setSubmitError(null);
 
     const cleanedCode = code.trim().toUpperCase();

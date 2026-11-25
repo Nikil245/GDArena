@@ -109,7 +109,7 @@ npm run start
 
 ### Voice Features
 - **Human Microphone (STT):** Uses `MediaRecorder` and submits recorded audio to `POST /stt` (Groq Whisper), then automatically submits the transcribed text via `submit_turn`. Includes a small `"Use text instead"` fallback link for debugging.
-- **AI Speech Output (TTS):** Uses the browser `window.speechSynthesis` API to read AI turns aloud with distinct English voices, pitches, and rates per persona, plus a header **AI Voice / AI Muted** toggle.
+- **AI Speech Output (TTS):** Plays server-synthesized Edge TTS MP3 clips (`GET /audio/{room_code}/{turn_id}.mp3`) sequentially through a queued `HTMLAudioElement` (with Web Speech API fallback only if browser voices are installed). Includes a header **AI Voice / AI Muted** toggle, a **Test voice** button (`POST /tts/test`), and an autoplay unlock banner if the browser blocks audio.
 
 ---
 

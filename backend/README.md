@@ -31,8 +31,8 @@ backend/
 │   │   ├── scoring.py       # Per-turn JSON scoring, leaderboard maths, final feedback
 │   │   ├── personas.py      # Distinct AI personas (5 core + 5 extra for up to 10 seats)
 │   │   ├── topics.py        # Topic bank loader
-│   │   ├── stt.py           # Voice-ready STT interface (TextOnlySTT + WhisperSTT stub)
-│   │   └── tts.py           # Voice-ready TTS interface (NullTTS stub)
+│   │   ├── stt.py           # Speech-to-text (Groq Whisper + faster-whisper stub)
+│   │   └── tts.py           # Server-side Text-to-Speech (EdgeTTS + temp MP3 cleanup)
 │   └── data/
 │       └── topics.json      # 37 GD topics across 4 categories
 ├── scripts/

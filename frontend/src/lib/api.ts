@@ -156,6 +156,56 @@ export async function fetchReport(
   return { status: "ready", report: body as FinalReport };
 }
 
+export function resolveApiUrl(path: string): string {
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  return `${getApiBaseUrl()}${normalized}`;
+}
+
+export async function fetchTestVoice(voice?: string): Promise<Blob> {
+  let response: Response;
+  try {
+    response = await fetch(`${getApiBaseUrl()}/tts/test`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(voice ? { voice } : {}),
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiError(
+      0,
+      "network_error",
+      "Unable to reach the server for voice testing."
+    );
+  }
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    if (
+      body &&
+      typeof body === "object" &&
+      "error" in body &&
+      body.error &&
+      typeof body.error === "object"
+    ) {
+      const err = body.error as { code?: string; message?: string };
+      throw new ApiError(
+        response.status,
+        err.code ?? "tts_error",
+        err.message ?? "Voice test failed."
+      );
+    }
+    throw new ApiError(
+      response.status,
+      "tts_error",
+      `Voice test failed (${response.status}).`
+    );
+  }
+  return response.blob();
+}
+
 export async function transcribeAudio(
   audioBlob: Blob,
   language = "en"

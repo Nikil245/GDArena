@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { ApiError, transcribeAudio } from "@/lib/api";
 import { formatSeconds } from "@/lib/format";
-import { unlockSpeech } from "@/lib/speech";
+import { unlockAudio } from "@/lib/speech";
 import type { Participant, QueueItem, Speaker } from "@/lib/types";
 
 interface TurnControlsProps {
@@ -21,6 +21,7 @@ interface TurnControlsProps {
   queue: QueueItem[];
   turnRemainingSeconds: number | null;
   disabled: boolean;
+  onRecordingChange?: (recording: boolean) => void;
   onRaiseHand: () => void;
   onLowerHand: () => void;
   onSubmitTurn: (text: string, source?: "text" | "voice") => void;
@@ -47,6 +48,7 @@ export function TurnControls({
   queue,
   turnRemainingSeconds,
   disabled,
+  onRecordingChange,
   onRaiseHand,
   onLowerHand,
   onSubmitTurn,
@@ -78,6 +80,11 @@ export function TurnControls({
       streamRef.current = null;
     }
   }, []);
+
+  // Notify parent when recording state changes
+  useEffect(() => {
+    onRecordingChange?.(recording);
+  }, [recording, onRecordingChange]);
 
   // Recording elapsed timer
   useEffect(() => {
@@ -150,7 +157,7 @@ export function TurnControls({
 
   const startRecording = useCallback(async () => {
     if (!isMyTurn || disabled || transcribing || recording) return;
-    unlockSpeech();
+    unlockAudio();
     setVoiceError(null);
 
     if (
@@ -288,7 +295,7 @@ export function TurnControls({
   };
 
   const handleRaiseHand = () => {
-    unlockSpeech();
+    unlockAudio();
     onRaiseHand();
   };
 

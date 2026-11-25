@@ -20,6 +20,7 @@ export type ConnectionStatus =
 
 export interface RoomSocketState {
   status: ConnectionStatus;
+  welcomeCount: number;
   you: Participant | null;
   snapshot: RoomSnapshot | null;
   scoreAdjustments: WsScoreAdjustedData[];
@@ -81,6 +82,7 @@ export function useRoomSocket(
 ): UseRoomSocketResult {
   const [state, setState] = useState<RoomSocketState>({
     status: "connecting",
+    welcomeCount: 0,
     you: null,
     snapshot: null,
     scoreAdjustments: [],
@@ -111,6 +113,7 @@ export function useRoomSocket(
         setState((prev) => ({
           ...prev,
           status: "connected",
+          welcomeCount: prev.welcomeCount + 1,
           you: syncedYou,
           snapshot: {
             ...snap,

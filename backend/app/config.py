@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     stt_provider: str = "whisper"  # whisper | faster_whisper (stub) | text | mock
     stt_model: str = "whisper-large-v3-turbo"
     stt_fallback_model: str = "whisper-large-v3"
-    tts_provider: str = "none"  # none (handled client-side via Web Speech API in stage 2a)
+    tts_provider: str = "edge"  # edge | none | mock
 
     @property
     def api_key(self) -> str | None:

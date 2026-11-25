@@ -19,9 +19,17 @@ class Persona:
     style: str  # prompt directive
     eagerness: float  # base probability per second of raising a hand
     temperature: float
+    voice: str  # Edge TTS Neural voice ShortName
+    rate: str = "+0%"  # Edge TTS speaking rate adjustment
 
     def public(self) -> dict:
-        return {"key": self.key, "label": self.label, "description": self.description}
+        return {
+            "key": self.key,
+            "label": self.label,
+            "description": self.description,
+            "voice": self.voice,
+            "rate": self.rate,
+        }
 
 
 CORE_PERSONAS: tuple[Persona, ...] = (
@@ -36,6 +44,8 @@ CORE_PERSONAS: tuple[Persona, ...] = (
         ),
         eagerness=0.22,
         temperature=0.9,
+        voice="en-IN-PrabhatNeural",
+        rate="+8%",
     ),
     Persona(
         key="calm_analyst",
@@ -48,6 +58,8 @@ CORE_PERSONAS: tuple[Persona, ...] = (
         ),
         eagerness=0.12,
         temperature=0.6,
+        voice="en-IN-NeerjaNeural",
+        rate="-5%",
     ),
     Persona(
         key="data_driven",
@@ -60,6 +72,8 @@ CORE_PERSONAS: tuple[Persona, ...] = (
         ),
         eagerness=0.15,
         temperature=0.6,
+        voice="en-GB-RyanNeural",
+        rate="+0%",
     ),
     Persona(
         key="empathetic",
@@ -72,6 +86,8 @@ CORE_PERSONAS: tuple[Persona, ...] = (
         ),
         eagerness=0.12,
         temperature=0.8,
+        voice="en-US-JennyNeural",
+        rate="-3%",
     ),
     Persona(
         key="devils_advocate",
@@ -84,6 +100,8 @@ CORE_PERSONAS: tuple[Persona, ...] = (
         ),
         eagerness=0.17,
         temperature=0.9,
+        voice="en-US-GuyNeural",
+        rate="+5%",
     ),
 )
 
@@ -96,6 +114,8 @@ EXTRA_PERSONAS: tuple[Persona, ...] = (
         style="You are optimistic and future-focused. Paint the long-term opportunity and propose bold ideas.",
         eagerness=0.13,
         temperature=0.9,
+        voice="en-GB-SoniaNeural",
+        rate="+5%",
     ),
     Persona(
         key="pragmatist",
@@ -105,6 +125,8 @@ EXTRA_PERSONAS: tuple[Persona, ...] = (
         style="You are practical. Focus on implementation, cost, feasibility and concrete next steps.",
         eagerness=0.13,
         temperature=0.6,
+        voice="en-AU-WilliamNeural",
+        rate="+0%",
     ),
     Persona(
         key="storyteller",
@@ -114,6 +136,8 @@ EXTRA_PERSONAS: tuple[Persona, ...] = (
         style="You make your point through a short, relatable anecdote or everyday example, then state the takeaway.",
         eagerness=0.11,
         temperature=0.9,
+        voice="en-AU-NatashaNeural",
+        rate="-4%",
     ),
     Persona(
         key="consensus_builder",
@@ -126,6 +150,8 @@ EXTRA_PERSONAS: tuple[Persona, ...] = (
         ),
         eagerness=0.10,
         temperature=0.6,
+        voice="en-CA-LiamNeural",
+        rate="-2%",
     ),
     Persona(
         key="questioner",
@@ -135,6 +161,8 @@ EXTRA_PERSONAS: tuple[Persona, ...] = (
         style="You expose hidden assumptions with one sharp question, then briefly give your own answer to it.",
         eagerness=0.14,
         temperature=0.8,
+        voice="en-US-AriaNeural",
+        rate="+4%",
     ),
 )
 
@@ -170,4 +198,3 @@ def assign_personas(
         taken.add(name.lower())
         result.append((persona, name))
     return result
-

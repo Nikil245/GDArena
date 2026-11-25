@@ -316,6 +316,7 @@ def main() -> int:
             }
             if not args.real:
                 env["LLM_PROVIDER"] = "mock"
+                env["TTS_PROVIDER"] = "none"
             proc = start_server(port, env, args.quiet)
             base_url = f"http://127.0.0.1:{port}"
 

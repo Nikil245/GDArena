@@ -32,7 +32,7 @@ from ..services import ai_agent, scoring
 from ..services.llm import LLMClient, get_llm
 from ..services.personas import Persona, assign_personas, get_persona
 from ..services.stt import SpeechInput, SpeechToText, STTError, VoiceNotSupportedError, get_stt, resolve_speech
-from ..services.tts import TextToSpeech, get_tts
+from ..services.tts import TextToSpeech, cleanup_room_audio, get_tts, mp3_duration_seconds, save_turn_audio
 from ..timeutil import iso, utcnow
 from .errors import GDError
 from .hub import ClientConnection, RoomHub
@@ -71,6 +71,7 @@ class Entry:
     started_at: datetime
     ended_at: datetime
     audio_url: str | None = None
+    audio_duration_seconds: float | None = None
     scores: dict[str, int] | None = None
     comment: str | None = None
     turn_score: float | None = None
@@ -85,6 +86,7 @@ class Entry:
             "text": self.text,
             "source": self.source,
             "audio_url": self.audio_url,
+            "audio_duration_seconds": self.audio_duration_seconds,
             "started_at": iso(self.started_at),
             "ended_at": iso(self.ended_at),
             "scores": self.scores,
@@ -508,6 +510,7 @@ class RoomRuntime:
         tick = self._tick_task
         if tick is not None and tick is not asyncio.current_task() and not tick.done():
             tick.cancel()
+        cleanup_room_audio(self.code)
         self._spawn(self._build_report())
         log.info("Room %s ended (%s)", self.code, reason)
 
@@ -678,7 +681,16 @@ class RoomRuntime:
         if m.is_ai:
             self.active.task = self._spawn(self._run_ai_turn(self.active))
 
-    def _record_entry(self, m: Member, turn: ActiveTurn, text: str, *, source: str, audio_url: str | None = None) -> Entry:
+    def _record_entry(
+        self,
+        m: Member,
+        turn: ActiveTurn,
+        text: str,
+        *,
+        source: str,
+        audio_bytes: bytes | None = None,
+        audio_duration_seconds: float | None = None,
+    ) -> Entry:
         ended = utcnow()
         with new_session() as s:
             row = Turn(
@@ -694,8 +706,20 @@ class RoomRuntime:
             s.add(row)
             s.commit()
             s.refresh(row)
+
+        turn_id = row.id or 0
+        audio_url: str | None = None
+        if audio_bytes and turn_id > 0:
+            try:
+                save_turn_audio(self.code, turn_id, audio_bytes)
+                audio_url = f"/audio/{self.code}/{turn_id}.mp3"
+            except Exception as exc:
+                log.error("Failed to save audio for turn %s in room %s: %s", turn_id, self.code, exc, exc_info=True)
+                audio_url = None
+                audio_duration_seconds = None
+
         entry = Entry(
-            turn_id=row.id or 0,
+            turn_id=turn_id,
             seq=turn.seq,
             participant_id=m.id,
             name=m.name,
@@ -705,6 +729,7 @@ class RoomRuntime:
             started_at=turn.started_at,
             ended_at=ended,
             audio_url=audio_url,
+            audio_duration_seconds=round(audio_duration_seconds, 2) if audio_duration_seconds is not None else None,
         )
         self.entries.append(entry)
         turn.entry_recorded = True
@@ -781,7 +806,6 @@ class RoomRuntime:
                 ),
                 timeout=timeout,
             )
-            synthesis = await self.tts.synthesize(text, voice=m.persona.key)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -792,13 +816,38 @@ class RoomRuntime:
                     self._advance()
             return
 
+        mp3_bytes: bytes | None = None
+        audio_duration: float | None = None
+        try:
+            raw_audio = await asyncio.wait_for(
+                self.tts.synthesize(text, voice=m.persona.voice, rate=m.persona.rate),
+                timeout=20.0,
+            )
+            if raw_audio:
+                mp3_bytes = raw_audio
+                audio_duration = mp3_duration_seconds(raw_audio)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.error("TTS failed for %s in room %s: %s", m.name, self.code, exc, exc_info=True)
+            mp3_bytes = None
+            audio_duration = None
+
         async with self.lock:
             if self.active is not turn or self.status != RoomStatus.RUNNING:
                 return
-            self._record_entry(m, turn, text, source="ai", audio_url=synthesis.audio_url if synthesis else None)
-            hold = self._speaking_seconds(text)
-            if synthesis and synthesis.duration_seconds:
-                hold = synthesis.duration_seconds
+            self._record_entry(
+                m,
+                turn,
+                text,
+                source="ai",
+                audio_bytes=mp3_bytes,
+                audio_duration_seconds=audio_duration,
+            )
+            if audio_duration is not None and audio_duration > 0:
+                hold = audio_duration + 0.5
+            else:
+                hold = self._speaking_seconds(text)
             if self.turn_limit_seconds is not None and turn.deadline_mono is not None:
                 hold = min(hold, max(0.0, turn.deadline_mono - time.monotonic()))
             elif hold > 0:
@@ -1091,6 +1140,7 @@ class RoomRuntime:
             task.cancel()
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
+        cleanup_room_audio(self.code)
 
 
 # ======================================================================================

@@ -61,12 +61,13 @@ export function RoundTable({
       );
     }
 
-    const isSpeaking =
-      currentSpeaker?.participant_id === p.id ||
-      ttsSpeakingParticipantId === p.id;
     const isThinking =
       currentSpeaker?.participant_id === p.id &&
       currentSpeaker?.phase === "thinking";
+    const isSpeaking = p.is_ai
+      ? ttsSpeakingParticipantId === p.id
+      : currentSpeaker?.participant_id === p.id;
+    const isActiveTurn = isSpeaking || isThinking;
     const qPos = queuePosition.get(p.id);
     const isYou = youId !== null && p.id === youId;
 
@@ -77,6 +78,8 @@ export function RoundTable({
         } ${
           isSpeaking
             ? "border-2 border-blue-800 bg-blue-50"
+            : isThinking
+            ? "border-2 border-slate-400 bg-slate-50"
             : "border border-slate-200"
         }`}
         title={
@@ -86,15 +89,19 @@ export function RoundTable({
         }
       >
         {/* Speaking / Thinking solid badge */}
-        {isSpeaking && (
-          <span className="absolute -top-2.5 left-2.5 inline-flex items-center gap-1 rounded bg-blue-800 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+        {isActiveTurn && (
+          <span
+            className={`absolute -top-2.5 left-2.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white ${
+              isSpeaking ? "bg-blue-800" : "bg-slate-600"
+            }`}
+          >
             <Mic className="h-2.5 w-2.5" strokeWidth={2} />
-            {isThinking ? "Thinking" : "Speaking"}
+            {isSpeaking ? "Speaking" : "Thinking"}
           </span>
         )}
 
         {/* Raised hand badge */}
-        {qPos !== undefined && !isSpeaking && (
+        {qPos !== undefined && !isActiveTurn && (
           <span
             className="absolute -top-2.5 right-2 inline-flex items-center gap-1 rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900"
             title={`Raise-hand queue position #${qPos}`}

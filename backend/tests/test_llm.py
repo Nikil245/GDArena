@@ -15,7 +15,7 @@ from app.core.runtime import RoomRuntime
 from app.db import init_db, new_session
 from app.main import app
 from app.models import Role, Room
-from app.services import ai_agent, scoring, stt as stt_svc
+from app.services import ai_agent, scoring, stt as stt_svc, tts as tts_svc
 from app.services.llm import (
     LLMClient,
     LLMError,
@@ -27,6 +27,16 @@ from app.services.llm import (
 )
 from app.services.personas import CORE_PERSONAS, assign_personas
 from app.services.stt import GroqWhisperSTT, MockSTT
+from app.services.tts import (
+    EdgeTTS,
+    MockTTS,
+    NullTTS,
+    cleanup_room_audio,
+    get_turn_audio_path,
+    mp3_duration_seconds,
+    save_turn_audio,
+    verify_tts_voices,
+)
 
 
 def _completion(content: str) -> dict:
@@ -284,5 +294,135 @@ def test_turn_flow_timeout_leaderboard_and_quiet_ai_skip() -> None:
         assert llm.calls >= 1
         assert not any(e["reason"] == "ai_error" for e in skipped_events)
         await rt.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_tts_storage_endpoints_and_voice_verification(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    mock_tts = MockTTS()
+    mp3 = asyncio.run(mock_tts.synthesize("Hello group.", voice="en-IN-NeerjaNeural"))
+    assert len(mp3) > 0
+    dur = mp3_duration_seconds(mp3)
+    assert dur is not None and dur > 0
+
+    # Audio file storage + HTTP serving + cleanup
+    code = "TTS99"
+    saved = save_turn_audio(code, 7, mp3, base_dir=tmp_path)
+    assert saved.is_file()
+    assert get_turn_audio_path(code, 7, base_dir=tmp_path) == saved
+
+    monkeypatch.setattr("app.api.rooms.get_turn_audio_path", lambda rc, tid: get_turn_audio_path(rc, tid, base_dir=tmp_path))
+    monkeypatch.setattr("app.api.rooms.get_tts", lambda: mock_tts)
+    client = TestClient(app)
+
+    audio_resp = client.get(f"/audio/{code}/7.mp3")
+    assert audio_resp.status_code == 200
+    assert audio_resp.headers["content-type"].startswith("audio/mpeg")
+    assert audio_resp.content == mp3
+
+    assert client.get(f"/audio/{code}/999.mp3").status_code == 404
+
+    tts_test_ok = client.post("/tts/test", json={"voice": "en-IN-NeerjaNeural"})
+    assert tts_test_ok.status_code == 200
+    assert tts_test_ok.headers["content-type"].startswith("audio/mpeg")
+    assert tts_test_ok.content == mp3
+
+    monkeypatch.setattr("app.api.rooms.get_tts", lambda: NullTTS())
+    tts_test_off = client.post("/tts/test")
+    assert tts_test_off.status_code == 400
+    assert tts_test_off.json()["error"]["code"] == "tts_disabled"
+
+    cleanup_room_audio(code, base_dir=tmp_path)
+    assert get_turn_audio_path(code, 7, base_dir=tmp_path) is None
+
+    # Startup voice verification with fallback when a configured voice is missing
+    edge = EdgeTTS()
+    async def fake_list_voices():
+        return [
+            {"ShortName": "en-IN-NeerjaNeural", "Locale": "en-IN"},
+            {"ShortName": "en-US-JennyNeural", "Locale": "en-US"},
+        ]
+    async def fake_synth(text: str, voice: str = "en-US-JennyNeural", *, rate: str = "+0%") -> bytes:
+        return mp3
+    monkeypatch.setattr(edge, "synthesize", fake_synth)
+    report = asyncio.run(verify_tts_voices(edge, list_voices_fn=fake_list_voices))
+    assert report["status"] == "ok"
+    assert edge.resolve_voice("en-IN-NeerjaNeural") == "en-IN-NeerjaNeural"
+    assert edge.resolve_voice("en-GB-RyanNeural") in {"en-IN-NeerjaNeural", "en-US-JennyNeural"}
+
+
+def test_runtime_ai_turn_emits_audio_url_and_cleans_up_and_falls_back_on_tts_error() -> None:
+    class _OkLLM(LLMClient):
+        provider = "mock"
+        model = "mock-gd"
+        async def chat(self, messages, *, temperature=0.7, max_tokens=300, json_mode=False, purpose="generic", metadata=None):
+            if purpose == "score":
+                return '{"relevance": 8, "clarity": 8, "content": 8, "teamwork": 8, "comment": "Good point."}'
+            if purpose == "report":
+                return '{"strengths": ["Clear"], "improvements": ["More data"], "summary": "Solid."}'
+            return "Clear opening point with practical policy focus for everyone involved."
+
+    class _BrokenTTS(tts_svc.TextToSpeech):
+        name = "broken"
+        async def synthesize(self, text: str, voice: str = "en-US-JennyNeural", *, rate: str = "+0%") -> bytes:
+            raise tts_svc.TTSError("network blocked")
+
+    async def scenario() -> None:
+        init_db()
+        with new_session() as s:
+            room = Room(
+                code=generate_code(),
+                topic="TTS runtime test",
+                max_participants=2,
+                duration_seconds=120,
+                turn_limit_seconds=None,
+                fill_with_ai=True,
+            )
+            s.add(room)
+            s.commit()
+            s.refresh(room)
+
+        # 1. Happy path with MockTTS -> emits audio_url + audio_duration_seconds, cleans up on end()
+        settings = Settings(llm_provider="mock", ai_speaking_wpm=150)
+        rt = RoomRuntime(room, [], [], [], settings=settings, llm=_OkLLM(), stt=stt_svc.TextOnlySTT(), tts=MockTTS())
+        human = await rt.join("Host", Role.PLAYER)
+        await rt.start(human)
+        ai_player = next(m for m in rt.players() if m.is_ai)
+        async with rt.lock:
+            rt._ai_raise(ai_player)
+        await asyncio.sleep(0.15)
+        assert len(rt.entries) == 1
+        entry = rt.entries[0]
+        assert entry.audio_url == f"/audio/{rt.code}/{entry.turn_id}.mp3"
+        assert entry.audio_duration_seconds is not None and entry.audio_duration_seconds > 0
+        assert get_turn_audio_path(rt.code, entry.turn_id) is not None
+        await rt.end("moderator", by=human)
+        assert get_turn_audio_path(rt.code, entry.turn_id) is None
+        await rt.shutdown()
+
+        # 2. Broken TTS -> logs error, sets audio_url=None, turn still succeeds using word-count fallback
+        with new_session() as s:
+            room2 = Room(
+                code=generate_code(),
+                topic="TTS fallback test",
+                max_participants=2,
+                duration_seconds=120,
+                turn_limit_seconds=None,
+                fill_with_ai=True,
+            )
+            s.add(room2)
+            s.commit()
+            s.refresh(room2)
+        rt2 = RoomRuntime(room2, [], [], [], settings=settings, llm=_OkLLM(), stt=stt_svc.TextOnlySTT(), tts=_BrokenTTS())
+        human2 = await rt2.join("Host2", Role.PLAYER)
+        await rt2.start(human2)
+        ai_player2 = next(m for m in rt2.players() if m.is_ai)
+        async with rt2.lock:
+            rt2._ai_raise(ai_player2)
+        await asyncio.sleep(0.1)
+        assert len(rt2.entries) == 1
+        assert rt2.entries[0].audio_url is None
+        assert rt2.entries[0].text
+        await rt2.shutdown()
 
     asyncio.run(scenario())

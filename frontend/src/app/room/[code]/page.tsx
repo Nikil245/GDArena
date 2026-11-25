@@ -39,6 +39,7 @@ export default function RoomPage({ params }: RoomPageProps) {
   const [sessionLoaded, setSessionLoaded] = useState(false);
   const [session, setSession] = useState<StoredSession | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
+  const [isHumanRecording, setIsHumanRecording] = useState(false);
 
   useEffect(() => {
     const stored = loadRoomSession(roomCode);
@@ -74,11 +75,13 @@ export default function RoomPage({ params }: RoomPageProps) {
   const isDisconnected = state.status !== "connected";
   const canModerate = Boolean(you?.can_moderate);
 
-  const aiSpeech = useAiSpeech(
-    snapshot?.transcript,
-    snapshot?.participants,
-    snapshot?.room.status
-  );
+  const aiSpeech = useAiSpeech({
+    transcript: snapshot?.transcript,
+    participants: snapshot?.participants,
+    roomStatus: snapshot?.room.status,
+    welcomeCount: state.welcomeCount,
+    isHumanRecording,
+  });
 
   const headerRight = (
     <div className="flex flex-wrap items-center gap-2 sm:gap-3">
@@ -132,27 +135,35 @@ export default function RoomPage({ params }: RoomPageProps) {
           : "Connecting..."}
       </span>
 
-      {aiSpeech.supported && (
-        <button
-          type="button"
-          onClick={aiSpeech.toggleMute}
-          title={aiSpeech.muted ? "Unmute AI voices" : "Mute AI voices"}
-          className={`inline-flex items-center gap-1 rounded border px-2.5 py-1 text-xs font-medium transition-colors duration-150 ${
-            aiSpeech.muted
-              ? "border-slate-300 bg-slate-100 text-slate-600 hover:bg-slate-200"
-              : "border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50"
-          }`}
-        >
-          {aiSpeech.muted ? (
-            <VolumeX className="h-3.5 w-3.5 text-slate-500" strokeWidth={1.75} />
-          ) : (
-            <Volume2 className="h-3.5 w-3.5 text-blue-800" strokeWidth={1.75} />
-          )}
-          <span className="hidden sm:inline">
-            {aiSpeech.muted ? "AI Muted" : "AI Voice"}
-          </span>
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={aiSpeech.toggleMute}
+        title={aiSpeech.muted ? "Unmute AI voices" : "Mute AI voices"}
+        className={`inline-flex items-center gap-1 rounded border px-2.5 py-1 text-xs font-medium transition-colors duration-150 ${
+          aiSpeech.muted
+            ? "border-slate-300 bg-slate-100 text-slate-600 hover:bg-slate-200"
+            : "border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50"
+        }`}
+      >
+        {aiSpeech.muted ? (
+          <VolumeX className="h-3.5 w-3.5 text-slate-500" strokeWidth={1.75} />
+        ) : (
+          <Volume2 className="h-3.5 w-3.5 text-blue-800" strokeWidth={1.75} />
+        )}
+        <span className="hidden sm:inline">
+          {aiSpeech.muted ? "AI Muted" : "AI Voice"}
+        </span>
+      </button>
+
+      <button
+        type="button"
+        onClick={aiSpeech.testVoice}
+        disabled={aiSpeech.testingVoice}
+        title="Test server-side AI voice playback"
+        className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition-colors duration-150 hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {aiSpeech.testingVoice ? "Testing..." : "Test voice"}
+      </button>
 
       <Link
         href="/"
@@ -290,6 +301,41 @@ export default function RoomPage({ params }: RoomPageProps) {
           </div>
         )}
 
+        {/* Browser autoplay blocked banner */}
+        {aiSpeech.autoplayBlocked && !aiSpeech.muted && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-blue-800 bg-blue-50 px-4 py-2.5 text-sm text-blue-900">
+            <div className="flex items-center gap-2">
+              <Volume2 className="h-4 w-4 shrink-0 text-blue-800" strokeWidth={1.75} />
+              <span>Your browser blocked automatic AI audio playback.</span>
+            </div>
+            <button
+              type="button"
+              onClick={aiSpeech.enableAudio}
+              className="rounded bg-blue-800 px-3 py-1 text-xs font-semibold text-white transition-colors duration-150 hover:bg-blue-900"
+            >
+              Click here to enable AI voices
+            </button>
+          </div>
+        )}
+
+        {/* Voice test error / notice */}
+        {aiSpeech.voiceNotice && (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-800">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 shrink-0" strokeWidth={1.75} />
+              <span>{aiSpeech.voiceNotice}</span>
+            </div>
+            <button
+              type="button"
+              onClick={aiSpeech.clearVoiceNotice}
+              aria-label="Dismiss voice notice"
+              className="rounded p-1 text-red-700 hover:bg-red-100"
+            >
+              <X className="h-4 w-4" strokeWidth={1.75} />
+            </button>
+          </div>
+        )}
+
         {/* Non-fatal WebSocket error alert */}
         {state.lastError && (
           <div className="flex items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-800">
@@ -365,6 +411,7 @@ export default function RoomPage({ params }: RoomPageProps) {
                     queue={snapshot.queue}
                     turnRemainingSeconds={snapshot.timer.turn_remaining_seconds}
                     disabled={isDisconnected}
+                    onRecordingChange={setIsHumanRecording}
                     onRaiseHand={actions.raiseHand}
                     onLowerHand={() => actions.lowerHand()}
                     onSubmitTurn={actions.submitTurn}

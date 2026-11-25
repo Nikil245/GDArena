@@ -35,6 +35,8 @@ export interface Persona {
   label: string;
   description: string;
   name?: string;
+  voice?: string;
+  rate?: string;
 }
 
 export interface Room {
@@ -117,6 +119,7 @@ export interface TranscriptEntry {
   text: string;
   source: TurnSource;
   audio_url: string | null;
+  audio_duration_seconds?: number | null;
   started_at: string;
   ended_at: string;
   scores: ScoreBreakdown | null;
@@ -227,6 +230,7 @@ export interface HealthResponse {
   llm_model: string;
   stt_provider: string;
   stt_model?: string | null;
+  tts_provider?: string;
 }
 
 export interface SttResponse {

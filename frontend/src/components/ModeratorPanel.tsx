@@ -12,7 +12,7 @@ import {
   UserCheck,
 } from "lucide-react";
 import { formatScore } from "@/lib/format";
-import { unlockSpeech } from "@/lib/speech";
+import { unlockAudio } from "@/lib/speech";
 import type {
   Participant,
   Room,
@@ -74,7 +74,7 @@ export function ModeratorPanel({
             <button
               type="button"
               onClick={() => {
-                unlockSpeech();
+                unlockAudio();
                 onStartGd();
               }}
               disabled={disabled}

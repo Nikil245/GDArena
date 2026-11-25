@@ -1,5 +1,5 @@
 /**
- * Browser Web Speech API (speechSynthesis) utilities for AI participant voices.
+ * Browser audio unlock + optional Web Speech API fallback helpers.
  * All browser globals are strictly guarded for SSR safety.
  */
 
@@ -24,7 +24,12 @@ const PERSONA_PROFILES: Record<string, PersonaVoiceProfile> = {
 
 const PREFERRED_LANG_ORDER = ["en-in", "en-gb", "en-us"];
 
+// Tiny 44-byte silent PCM WAV clip to unlock HTMLAudioElement autoplay on user gesture.
+const SILENT_WAV_DATA_URI =
+  "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+
 let speechUnlocked = false;
+let audioUnlocked = false;
 
 export function isSpeechSupported(): boolean {
   return (
@@ -34,10 +39,15 @@ export function isSpeechSupported(): boolean {
   );
 }
 
-/**
- * Call inside a user click/submit handler (Join, Start, Raise Hand, Unmute)
- * so Chrome/Safari allow subsequent automatic AI speechSynthesis utterances.
- */
+export function hasSpeechSynthesisVoices(): boolean {
+  if (!isSpeechSupported()) return false;
+  try {
+    return window.speechSynthesis.getVoices().length > 0;
+  } catch {
+    return false;
+  }
+}
+
 export function unlockSpeech(): void {
   if (!isSpeechSupported()) return;
   try {
@@ -53,6 +63,35 @@ export function unlockSpeech(): void {
   } catch {
     // Ignore autoplay errors
   }
+}
+
+/**
+ * Call inside a user click/submit handler (Join, Start, Raise Hand, Unmute, Test Voice)
+ * so Chrome/Brave/Safari allow subsequent automatic HTMLAudioElement playback.
+ */
+export function unlockAudio(): void {
+  if (typeof window === "undefined") return;
+  if (!audioUnlocked && typeof Audio !== "undefined") {
+    try {
+      const silent = new Audio(SILENT_WAV_DATA_URI);
+      silent.volume = 0;
+      const playPromise = silent.play();
+      if (playPromise && typeof playPromise.then === "function") {
+        playPromise
+          .then(() => {
+            audioUnlocked = true;
+          })
+          .catch(() => {
+            // Browser may still block until next gesture; handled gracefully during playback
+          });
+      } else {
+        audioUnlocked = true;
+      }
+    } catch {
+      // Ignore
+    }
+  }
+  unlockSpeech();
 }
 
 export function pickEnglishVoices(
@@ -95,4 +134,3 @@ export function getPersonaVoiceSettings(
     rate: profile.rate,
   };
 }
-
