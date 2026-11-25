@@ -107,22 +107,20 @@ npm run start
 
 ---
 
-## Testing with Two Browser Tabs (Moderator + Player)
+### Voice Features
+- **Human Microphone (STT):** Uses `MediaRecorder` and submits recorded audio to `POST /stt` (Groq Whisper), then automatically submits the transcribed text via `submit_turn`. Includes a small `"Use text instead"` fallback link for debugging.
+- **AI Speech Output (TTS):** Uses the browser `window.speechSynthesis` API to read AI turns aloud with distinct English voices, pitches, and rates per persona, plus a header **AI Voice / AI Muted** toggle.
 
-1. **Tab 1 (Moderator):**
-   - Go to `http://localhost:3000`.
-   - Choose a topic (or select **Let moderator choose**), pick participant count (e.g., `6`), set duration (e.g., `2` minutes for a quick test), optionally toggle a per-turn limit, and click **Create Room**.
-   - On the Join screen, note/copy the 6-character room code, enter a name (e.g., `Moderator`), select **Moderator**, and click **Join Room**.
-   - You will land in the Lobby with the **Start Discussion** button.
-2. **Tab 2 (Player):**
-   - Open `http://localhost:3000/join` (or paste the **Copy Join Link** URL from Tab 1).
-   - Enter the room code, a different name (e.g., `Asha`), select **Player**, and click **Join Room**.
-   - You will appear in the Lobby on both tabs and see *"Waiting for moderator to start the GD..."*.
-3. **Run the GD:**
-   - In **Tab 1 (Moderator)**, click **Start Discussion**. Empty seats fill automatically with AI participants, and the server countdown timer begins ticking every second on both tabs.
-   - In **Tab 2 (Player)**, click **Raise Hand**. When given the floor (your seat highlights with a solid blue border and **Speaking** badge), type a point and submit.
-   - In **Tab 1 (Moderator)**, open the **Moderator Panel** to adjust points (`+1`, `+0.5`, `-0.5`, `-1`), review LLM score comments under **Score Comments**, skip a speaker, or click **End GD**.
-   - Refresh either tab mid-session to confirm the participant stays connected without losing their seat or role.
-4. **Results:**
-   - Once time expires or the moderator clicks **End GD**, both tabs transition to the Results screen showing the Best Performer, Final Leaderboard, and per-participant strengths and improvements.
+---
+
+## Testing with One Browser Tab (You as Host/Moderator + Player with AIs)
+
+1. Open `http://localhost:3000`.
+2. Pick a topic (or leave **Let moderator choose** selected), choose participants (e.g., `4`), set duration (e.g., `2` minutes), and click **Create Room**.
+3. On the Join screen, enter your name and keep **Player** selected, then click **Join Room** (this also unlocks browser audio playback). Because no separate moderator joined, you act as **Player (Host)** with both speaking controls and the Moderator Panel.
+4. Click **Start Discussion**. Empty seats fill with AI personas, the server countdown starts, and the full leaderboard populates immediately.
+5. Wait a couple of seconds for an AI to speak aloud, or click **Raise Hand**. When you hold the floor, click **Click to Speak (Microphone)**, allow microphone access, speak your point, and click again to stop and submit.
+6. Use the **Moderator Panel** to adjust points, inspect score comments, or click **End GD** to view the final report.
+
+For two-tab classroom testing, open `/join` in a second tab and join the first tab as **Moderator** and the second tab as **Player**.
 

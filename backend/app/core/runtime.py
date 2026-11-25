@@ -430,6 +430,8 @@ class RoomRuntime:
                     raise GDError("room_full", "All seats are taken.", 409)
             member = self._create_member(name=name, role=role, is_ai=False, persona=None)
             self._broadcast_participants()
+            if role == Role.PLAYER:
+                self._broadcast_leaderboard()
             return member
 
     async def start(self, by: Member) -> None:
@@ -455,6 +457,7 @@ class RoomRuntime:
             self._persist_room(status=self.status, started_at=self.started_at)
 
             self._broadcast_participants()
+            self._broadcast_leaderboard()
             self.hub.broadcast(
                 "gd_started",
                 {
@@ -464,6 +467,7 @@ class RoomRuntime:
                     "duration_seconds": self.duration_seconds,
                     "turn_limit_seconds": self.turn_limit_seconds,
                     "participants": self.participants_public(),
+                    "leaderboard": self.leaderboard(),
                 },
             )
             self._tick_task = self._spawn(self._tick_loop())
@@ -653,11 +657,14 @@ class RoomRuntime:
         if popped:
             self._broadcast_queue()
 
+    def _effective_turn_limit(self) -> int:
+        return self.turn_limit_seconds or self.settings.default_turn_limit_seconds
+
     def _begin_turn(self, m: Member) -> None:
         self.turn_seq += 1
         now = time.monotonic()
         started_at = utcnow()
-        limit = self.turn_limit_seconds
+        limit = self._effective_turn_limit()
         self.active = ActiveTurn(
             seq=self.turn_seq,
             participant_id=m.id,
@@ -707,7 +714,7 @@ class RoomRuntime:
         task.add_done_callback(self._scoring_tasks.discard)
         return entry
 
-    def _skip_active(self, reason: str) -> None:
+    def _skip_active(self, reason: str, *, quiet: bool = False) -> None:
         a = self.active
         if a is None:
             return
@@ -728,9 +735,10 @@ class RoomRuntime:
                     )
                 )
                 s.commit()
-            self.hub.broadcast(
-                "turn_skipped", {"participant_id": m.id, "name": m.name, "seq": a.seq, "reason": reason}
-            )
+            if not quiet:
+                self.hub.broadcast(
+                    "turn_skipped", {"participant_id": m.id, "name": m.name, "seq": a.seq, "reason": reason}
+                )
         self._release_floor()
 
     def _release_floor(self) -> None:
@@ -744,7 +752,11 @@ class RoomRuntime:
 
     def _speaking_seconds(self, text: str) -> float:
         wpm = self.settings.ai_speaking_wpm
-        return 0.0 if wpm <= 0 else len(text.split()) / wpm * 60.0
+        if wpm <= 0:
+            return 0.0
+        base = len(text.split()) / wpm * 60.0
+        # Give browser TTS a small buffer at normal speaking speeds so speech isn't clipped.
+        return max(2.0, base + 1.0) if wpm <= 200 else base
 
     # ==================================================================================
     # Background tasks
@@ -773,10 +785,10 @@ class RoomRuntime:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            log.warning("AI turn failed for %s in room %s: %s", m.name, self.code, exc)
+            log.error("AI turn failed for %s in room %s: %s", m.name, self.code, exc, exc_info=True)
             async with self.lock:
                 if self.active is turn:
-                    self._skip_active("ai_error")
+                    self._skip_active("ai_error", quiet=True)
                     self._advance()
             return
 
@@ -787,8 +799,12 @@ class RoomRuntime:
             hold = self._speaking_seconds(text)
             if synthesis and synthesis.duration_seconds:
                 hold = synthesis.duration_seconds
-            if turn.deadline_mono is not None:
+            if self.turn_limit_seconds is not None and turn.deadline_mono is not None:
                 hold = min(hold, max(0.0, turn.deadline_mono - time.monotonic()))
+            elif hold > 0:
+                now = time.monotonic()
+                turn.deadline_mono = now + hold + 1.0
+                turn.deadline_at = utcnow() + timedelta(seconds=hold + 1.0)
             if hold <= 0:
                 self._release_floor()
                 self._advance()
@@ -882,9 +898,11 @@ class RoomRuntime:
         nudge = self.settings.ai_idle_nudge_seconds
 
         if floor_idle and idle_for >= nudge:
-            pool = [m for m in candidates if m.id not in recent] or [m for m in candidates if m.id != last_speaker]
-            if not pool and idle_for >= 3 * nudge:
-                pool = candidates
+            pool = (
+                [m for m in candidates if m.id not in recent]
+                or [m for m in candidates if m.id != last_speaker]
+                or candidates
+            )
             if pool:
                 weights = [m.persona.eagerness for m in pool]  # type: ignore[union-attr]
                 self._ai_raise(self._rng.choices(pool, weights=weights, k=1)[0])
@@ -1106,10 +1124,12 @@ def _speech_input(msg: dict[str, Any]) -> SpeechInput:
             audio = base64.b64decode(msg["audio_b64"], validate=True)
         except (binascii.Error, ValueError, TypeError):
             raise GDError("invalid_message", "'audio_b64' is not valid base64.") from None
+    source_val = "voice" if msg.get("source") == "voice" else "text"
     return SpeechInput(
         text=text,
         audio=audio,
         mime_type=msg.get("mime_type"),
         language=str(msg.get("language") or "en"),
+        source=source_val,
     )
 

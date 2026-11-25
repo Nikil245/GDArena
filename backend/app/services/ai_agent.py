@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from .llm import LLMClient, LLMError, Message
+from .llm import LLMClient, LLMError, Message, strip_reasoning
 from .personas import Persona
 
 MAX_WORDS = 60
@@ -63,7 +63,7 @@ async def generate_ai_point(
     raw = await llm.chat(
         messages,
         temperature=persona.temperature,
-        max_tokens=160,
+        max_tokens=512,
         purpose="ai_turn",
         metadata={
             "persona_key": persona.key,
@@ -80,7 +80,7 @@ async def generate_ai_point(
 
 
 def clean_speech(text: str, *, name: str, max_words: int = MAX_WORDS) -> str:
-    t = text.strip()
+    t = strip_reasoning(text)
     t = re.sub(rf"^\W*{re.escape(name)}\W*:\s*", "", t, flags=re.IGNORECASE)  # "Arjun: ..."
     t = re.sub(r"\([^)]*\)|\[[^\]]*\]", "", t) if t.startswith(("(", "[")) else t  # leading stage directions
     t = re.sub(r"[*#`]+", "", t)

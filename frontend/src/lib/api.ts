@@ -7,6 +7,7 @@ import type {
   JoinRoomResponse,
   Room,
   RoomSnapshot,
+  SttResponse,
   TopicsResponse,
 } from "./types";
 
@@ -153,5 +154,60 @@ export async function fetchReport(
     );
   }
   return { status: "ready", report: body as FinalReport };
+}
+
+export async function transcribeAudio(
+  audioBlob: Blob,
+  language = "en"
+): Promise<SttResponse> {
+  const form = new FormData();
+  const ext = audioBlob.type.includes("ogg")
+    ? "ogg"
+    : audioBlob.type.includes("mp4") || audioBlob.type.includes("m4a")
+    ? "m4a"
+    : audioBlob.type.includes("wav")
+    ? "wav"
+    : "webm";
+  form.append("file", audioBlob, `turn.${ext}`);
+  form.append("language", language);
+
+  let response: Response;
+  try {
+    response = await fetch(`${getApiBaseUrl()}/stt`, {
+      method: "POST",
+      body: form,
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiError(
+      0,
+      "network_error",
+      "Unable to reach the server for speech transcription."
+    );
+  }
+
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    if (
+      body &&
+      typeof body === "object" &&
+      "error" in body &&
+      body.error &&
+      typeof body.error === "object"
+    ) {
+      const err = body.error as { code?: string; message?: string };
+      throw new ApiError(
+        response.status,
+        err.code ?? "stt_error",
+        err.message ?? "Could not transcribe audio."
+      );
+    }
+    throw new ApiError(
+      response.status,
+      "stt_error",
+      `Transcription failed (${response.status}).`
+    );
+  }
+  return body as SttResponse;
 }
 

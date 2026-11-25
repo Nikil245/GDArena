@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Check, Clock, Copy, Play, Shield, User, Users } from "lucide-react";
+import { unlockSpeech } from "@/lib/speech";
 import type { Participant, Room } from "@/lib/types";
 
 interface LobbyPanelProps {
@@ -177,7 +178,10 @@ export function LobbyPanel({
             {canStart ? (
               <button
                 type="button"
-                onClick={onStartGd}
+                onClick={() => {
+                  unlockSpeech();
+                  onStartGd();
+                }}
                 disabled={disabled}
                 className="inline-flex w-full items-center justify-center gap-2 rounded bg-blue-800 px-4 py-2.5 text-sm font-semibold text-white transition-colors duration-150 hover:bg-blue-900 disabled:cursor-not-allowed disabled:opacity-50"
               >

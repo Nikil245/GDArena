@@ -47,7 +47,9 @@ export function TimerBanner({
         </div>
 
         <div className="flex shrink-0 flex-wrap items-stretch gap-3">
-          {timer.turn_limit_seconds !== null && (
+          {(timer.turn_limit_seconds !== null ||
+            (currentSpeaker !== null &&
+              timer.turn_remaining_seconds !== null)) && (
             <div
               className={`flex min-w-[118px] flex-col justify-center rounded-md border px-3.5 py-2 ${
                 isLowTurn
@@ -66,7 +68,7 @@ export function TimerBanner({
               >
                 {currentSpeaker && timer.turn_remaining_seconds !== null
                   ? formatSeconds(timer.turn_remaining_seconds)
-                  : formatSeconds(timer.turn_limit_seconds)}
+                  : formatSeconds(timer.turn_limit_seconds ?? 60)}
               </span>
             </div>
           )}

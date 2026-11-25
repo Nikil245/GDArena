@@ -35,7 +35,7 @@ export interface RoomSocketActions {
   endGd: () => void;
   raiseHand: () => void;
   lowerHand: (participantId?: number) => void;
-  submitTurn: (text: string) => void;
+  submitTurn: (text: string, source?: "text" | "voice") => void;
   yieldTurn: () => void;
   grantTurn: (participantId: number) => void;
   skipSpeaker: () => void;
@@ -210,6 +210,9 @@ export function useRoomSocket(
                 turn_limit_seconds: event.data.turn_limit_seconds,
               },
               participants: synced,
+              ...(event.data.leaderboard
+                ? { leaderboard: event.data.leaderboard }
+                : {}),
             },
           };
         });
@@ -304,6 +307,9 @@ export function useRoomSocket(
       }
 
       case "turn_skipped": {
+        if (event.data.reason === "ai_error") {
+          break;
+        }
         const notice: ActivityNotice = {
           id: `skip-${event.data.seq}-${event.ts}`,
           kind: "turn_skipped",
@@ -605,7 +611,8 @@ export function useRoomSocket(
       [sendCommand]
     ),
     submitTurn: useCallback(
-      (text: string) => sendCommand({ type: "submit_turn", text }),
+      (text: string, source: "text" | "voice" = "text") =>
+        sendCommand({ type: "submit_turn", text, source }),
       [sendCommand]
     ),
     yieldTurn: useCallback(

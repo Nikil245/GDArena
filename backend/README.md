@@ -1,8 +1,8 @@
 # GD Arena — Backend
 
-Real-time Group Discussion (GD) practice backend built with **FastAPI**, **WebSockets**, **SQLite (SQLModel)**, and a provider-agnostic OpenAI-compatible LLM layer (defaulting to **Groq `llama-3.3-70b-versatile`**).
+Real-time Group Discussion (GD) practice backend built with **FastAPI**, **WebSockets**, **SQLite (SQLModel)**, and a provider-agnostic OpenAI-compatible LLM layer (defaulting to **Groq `openai/gpt-oss-120b`**, fallback `qwen/qwen3.6-27b`).
 
-Stage 1 is text-only, with stubbed STT (`app/services/stt.py`) and TTS (`app/services/tts.py`) interfaces so Whisper and voice output can be plugged in without changing the room protocol.
+Supports voice-based human turns via `POST /stt` (Groq Whisper `whisper-large-v3-turbo`, swappable for local `faster-whisper` via `STT_PROVIDER`) and text turns.
 
 ---
 
@@ -71,7 +71,12 @@ Edit `.env` and set your Groq API key:
 LLM_PROVIDER=groq
 GROQ_API_KEY=gsk_...
 LLM_BASE_URL=https://api.groq.com/openai/v1
-LLM_MODEL=llama-3.3-70b-versatile
+LLM_MODEL=openai/gpt-oss-120b
+LLM_FALLBACK_MODEL=qwen/qwen3.6-27b
+LLM_REASONING_EFFORT=low
+STT_PROVIDER=whisper
+STT_MODEL=whisper-large-v3-turbo
+STT_FALLBACK_MODEL=whisper-large-v3
 ```
 
 > **No API key yet?** Set `LLM_PROVIDER=mock` (or leave `GROQ_API_KEY` empty) to run with the built-in offline `MockLLM`.

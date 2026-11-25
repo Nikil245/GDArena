@@ -226,6 +226,14 @@ export interface HealthResponse {
   llm_provider: string;
   llm_model: string;
   stt_provider: string;
+  stt_model?: string | null;
+}
+
+export interface SttResponse {
+  text: string;
+  source: TurnSource;
+  language: string | null;
+  model?: string | null;
 }
 
 export interface DomainErrorPayload {
@@ -253,6 +261,7 @@ export interface WsGdStartedData {
   duration_seconds: number;
   turn_limit_seconds: number | null;
   participants: Participant[];
+  leaderboard?: LeaderboardRow[];
 }
 
 export interface WsQueueData {

@@ -232,10 +232,32 @@ Server health and active provider info.
 {
   "status": "ok",
   "llm_provider": "groq",
-  "llm_model": "llama-3.3-70b-versatile",
-  "stt_provider": "text"
+  "llm_model": "openai/gpt-oss-120b",
+  "stt_provider": "whisper",
+  "stt_model": "whisper-large-v3-turbo"
 }
 ```
+
+---
+
+### `POST /stt`
+Transcribe a recorded audio turn (`multipart/form-data`).
+
+- **Form fields:**
+  - `file`: audio binary (`webm`, `ogg`, `m4a`, `wav`, `mp3`, `flac`; max 20 MB)
+  - `language`: optional ISO-639-1 code (default `"en"`)
+- **200 OK:**
+```json
+{
+  "text": "I think we need to focus on measurable outcomes.",
+  "source": "voice",
+  "language": "en",
+  "model": "whisper-large-v3-turbo"
+}
+```
+- **Errors:**
+  - `400` `empty_audio` | `voice_not_supported` | `stt_error`
+  - `413` `audio_too_large`
 
 ---
 
@@ -409,7 +431,7 @@ Before closing on auth/lookup failure, the server sends one `error` event:
 | `end_gd` | Moderator / Host | — | `running -> finished` (`reason: "moderator"`), triggers final report. |
 | `raise_hand` | Player (running) | — | Joins the raise-hand queue (immediately gets floor if free). |
 | `lower_hand` | Player or Moderator | `participant_id?` | Removes self from queue; moderator may pass `participant_id` to lower another player's hand. |
-| `submit_turn` | Current speaker | `text` (or voice-ready `audio_b64`, `mime_type`, `language?`) | Submits the turn, appends to transcript, triggers async LLM scoring, advances floor. |
+| `submit_turn` | Current speaker | `text`, optional `source` (`"text" \| "voice"`), or `audio_b64`, `mime_type`, `language?` | Submits the turn, appends to transcript, triggers async LLM scoring, advances floor. |
 | `yield_turn` | Current speaker | — | Gives up the floor without speaking (`turn_skipped` with `reason: "yielded"`). |
 | `grant_turn` | Moderator / Host | `participant_id` | Gives the floor to a specific player when the floor is free. |
 | `skip_speaker` | Moderator / Host | — | Ends the active speaker's turn (`turn_skipped` with `reason: "moderator_skip"`) and advances. |
@@ -434,7 +456,7 @@ In stage 1 (`STT_PROVIDER=text`), sending `audio_b64` without `text` returns an 
 | `state` | Unicast | `RoomSnapshot` | Reply to `get_state`. |
 | `pong` | Unicast | `{ "request_id": any \| null }` | Reply to `ping`. |
 | `participants` | Broadcast | `{ "participants": Participant[] }` | Join, connect/disconnect, or AI fill on start. |
-| `gd_started` | Broadcast | `{ "topic", "started_at", "ends_at", "duration_seconds", "turn_limit_seconds", "participants" }` | Transition `lobby -> running`. |
+| `gd_started` | Broadcast | `{ "topic", "started_at", "ends_at", "duration_seconds", "turn_limit_seconds", "participants", "leaderboard" }` | Transition `lobby -> running`. |
 | `timer` | Broadcast | `Timer` | Every 1 second while running, plus once when ended. |
 | `queue` | Broadcast | `{ "queue": QueueItem[] }` | Raise hand, lower hand, pop next speaker, or clear on end. |
 | `speaker_changed` | Broadcast | `{ "speaker": Speaker \| null }` | Floor granted, AI phase changes `thinking -> speaking`, or floor released. |

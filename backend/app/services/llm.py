@@ -3,8 +3,11 @@
 Any provider exposing an OpenAI-compatible endpoint (Groq, OpenAI, Together, OpenRouter,
 Ollama, vLLM, ...) works by changing ``LLM_BASE_URL`` / ``LLM_MODEL`` / the API key.
 
-* 429 rate limits are retried with exponential backoff + jitter, honouring ``Retry-After``.
-* Timeouts, connection errors and 5xx are retried the same way.
+* 429 rate limits and transient 5xx/network errors are retried with exponential backoff + jitter,
+  honouring ``Retry-After``.
+* Reasoning-model tags (``<think>...</think>``) are stripped and ``reasoning_effort`` is
+  passed when supported so only the final answer text is returned.
+* ``chat_json`` includes local JSON cleanup plus a single LLM JSON-repair retry if parsing fails.
 * ``MockLLM`` is an offline stand-in used for tests and for local dev without an API key.
 """
 
@@ -19,7 +22,7 @@ import time
 from abc import ABC, abstractmethod
 from email.utils import parsedate_to_datetime
 from functools import lru_cache
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import openai
@@ -27,9 +30,30 @@ from openai import AsyncOpenAI
 
 from ..config import Settings, get_settings
 
+if TYPE_CHECKING:
+    from .stt import SpeechToText
+
 log = logging.getLogger(__name__)
 
 Message = dict[str, str]
+
+LLM_FALLBACK_PREFERENCE: tuple[str, ...] = (
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.6-27b",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3-32b",
+    "llama-3.1-8b-instant",
+)
+
+STT_FALLBACK_PREFERENCE: tuple[str, ...] = (
+    "whisper-large-v3-turbo",
+    "whisper-large-v3",
+)
+
+_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.IGNORECASE | re.DOTALL)
+_UNCLOSED_THINK_RE = re.compile(r"^<think\b[^>]*>.*$", re.IGNORECASE | re.DOTALL)
+_FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*|\s*```$")
+_TRAILING_COMMA_RE = re.compile(r",\s*([}\]])")
 
 
 class LLMError(RuntimeError):
@@ -38,6 +62,13 @@ class LLMError(RuntimeError):
 
 class LLMRateLimitError(LLMError):
     """Still rate limited (HTTP 429) after all retries."""
+
+
+def strip_reasoning(text: str) -> str:
+    """Remove inline reasoning tags so callers only receive the final answer."""
+    cleaned = _THINK_BLOCK_RE.sub("", text)
+    cleaned = _UNCLOSED_THINK_RE.sub("", cleaned)
+    return cleaned.strip()
 
 
 class LLMClient(ABC):
@@ -66,7 +97,7 @@ class LLMClient(ABC):
         messages: list[Message],
         *,
         temperature: float = 0.3,
-        max_tokens: int = 400,
+        max_tokens: int = 512,
         purpose: str = "generic",
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -78,7 +109,33 @@ class LLMClient(ABC):
             purpose=purpose,
             metadata=metadata,
         )
-        return parse_json_object(text)
+        try:
+            return parse_json_object(text)
+        except LLMError as first_err:
+            log.warning(
+                "Malformed JSON from LLM (%s); attempting one repair pass: %s",
+                purpose,
+                first_err,
+            )
+            repair_messages: list[Message] = [
+                {
+                    "role": "system",
+                    "content": "Return ONLY a single valid JSON object. No prose, no markdown fences.",
+                },
+                {
+                    "role": "user",
+                    "content": f"Convert or repair this into a valid JSON object:\n{text}",
+                },
+            ]
+            repaired = await self.chat(
+                repair_messages,
+                temperature=0.0,
+                max_tokens=max_tokens,
+                json_mode=True,
+                purpose=f"{purpose}_json_repair",
+                metadata=metadata,
+            )
+            return parse_json_object(repaired)
 
     async def aclose(self) -> None:  # pragma: no cover - trivial
         return None
@@ -92,8 +149,9 @@ class OpenAICompatibleLLM(LLMClient):
         api_key: str,
         base_url: str,
         model: str,
+        reasoning_effort: str | None = "low",
         timeout: float = 30.0,
-        max_retries: int = 5,
+        max_retries: int = 1,
         backoff_base: float = 1.0,
         backoff_max: float = 30.0,
         max_concurrency: int = 4,
@@ -101,6 +159,7 @@ class OpenAICompatibleLLM(LLMClient):
     ) -> None:
         self.provider = provider
         self.model = model
+        self._reasoning_effort = reasoning_effort.strip().lower() if reasoning_effort else None
         self._max_retries = max(0, max_retries)
         self._backoff_base = backoff_base
         self._backoff_max = backoff_max
@@ -125,6 +184,7 @@ class OpenAICompatibleLLM(LLMClient):
         metadata: dict[str, Any] | None = None,
     ) -> str:
         use_json = json_mode
+        use_reasoning = bool(self._reasoning_effort)
         attempt = 0
         while True:
             started = time.monotonic()
@@ -132,6 +192,8 @@ class OpenAICompatibleLLM(LLMClient):
                 extra: dict[str, Any] = {}
                 if use_json:
                     extra["response_format"] = {"type": "json_object"}
+                if use_reasoning and self._reasoning_effort:
+                    extra["reasoning_effort"] = self._reasoning_effort
                 async with self._semaphore:
                     resp = await self._client.chat.completions.create(
                         model=self.model,
@@ -140,38 +202,84 @@ class OpenAICompatibleLLM(LLMClient):
                         max_tokens=max_tokens,
                         **extra,
                     )
-                content = (resp.choices[0].message.content or "").strip() if resp.choices else ""
+                raw_content = (resp.choices[0].message.content or "") if resp.choices else ""
+                content = strip_reasoning(raw_content)
                 if not content:
-                    raise LLMError("LLM returned an empty completion")
+                    raise LLMError(f"LLM returned an empty completion ({purpose}, model={self.model})")
                 log.debug("LLM %s ok in %.2fs", purpose, time.monotonic() - started)
                 return content
             except openai.RateLimitError as exc:
                 if attempt >= self._max_retries:
+                    log.error(
+                        "LLM 429 rate limit exhausted (%s, model=%s): %s",
+                        purpose,
+                        self.model,
+                        exc,
+                        exc_info=True,
+                    )
                     raise LLMRateLimitError(
-                        f"rate limited by {self.provider} after {attempt} retries"
+                        f"rate limited by {self.provider} after {attempt} retries: {exc}"
                     ) from exc
                 delay = self._retry_after(exc) or self._backoff(attempt)
                 log.warning(
-                    "LLM 429 rate limit (%s). Retry %d/%d in %.1fs",
-                    purpose, attempt + 1, self._max_retries, delay,
+                    "LLM 429 rate limit (%s, model=%s). Retry %d/%d in %.1fs: %s",
+                    purpose,
+                    self.model,
+                    attempt + 1,
+                    self._max_retries,
+                    delay,
+                    exc,
                 )
             except (openai.APITimeoutError, openai.APIConnectionError, openai.InternalServerError) as exc:
                 if attempt >= self._max_retries:
+                    log.error(
+                        "LLM transient failure exhausted (%s, model=%s): %s",
+                        purpose,
+                        self.model,
+                        exc,
+                        exc_info=True,
+                    )
                     raise LLMError(f"LLM unavailable after {attempt} retries: {exc}") from exc
                 delay = self._backoff(attempt)
                 log.warning(
-                    "LLM transient error (%s: %s). Retry %d/%d in %.1fs",
-                    purpose, type(exc).__name__, attempt + 1, self._max_retries, delay,
+                    "LLM transient error (%s, model=%s, %s). Retry %d/%d in %.1fs: %s",
+                    purpose,
+                    self.model,
+                    type(exc).__name__,
+                    attempt + 1,
+                    self._max_retries,
+                    delay,
+                    exc,
                 )
             except openai.BadRequestError as exc:
-                # Some models/providers reject JSON mode, or fail their own JSON validation
-                # (Groq: json_validate_failed). Retry once without it and parse loosely.
+                msg_lower = str(exc).lower()
+                if use_reasoning and "reasoning" in msg_lower:
+                    log.info(
+                        "LLM rejected reasoning_effort (%s, model=%s); retrying without it",
+                        purpose,
+                        self.model,
+                    )
+                    use_reasoning = False
+                    continue
                 if use_json:
-                    log.info("LLM rejected JSON mode (%s); retrying without it", purpose)
+                    log.info("LLM rejected JSON mode (%s, model=%s); retrying without it", purpose, self.model)
                     use_json = False
                     continue
+                if use_reasoning:
+                    log.info("LLM bad request (%s, model=%s); retrying without reasoning_effort", purpose, self.model)
+                    use_reasoning = False
+                    continue
+                log.error("LLM bad request (%s, model=%s): %s", purpose, self.model, exc, exc_info=True)
                 raise LLMError(f"LLM bad request: {exc}") from exc
             except openai.APIStatusError as exc:
+                log.error(
+                    "LLM API error %s (%s, model=%s): %s",
+                    exc.status_code,
+                    purpose,
+                    self.model,
+                    exc,
+                    exc_info=True,
+                )
                 raise LLMError(f"LLM API error {exc.status_code}: {exc}") from exc
             attempt += 1
             await asyncio.sleep(delay)
@@ -206,25 +314,147 @@ class OpenAICompatibleLLM(LLMClient):
         await self._client.close()
 
 
-_FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*|\s*```$")
-
-
 def parse_json_object(text: str) -> dict[str, Any]:
-    """Parse a JSON object from model output, tolerating code fences and surrounding prose."""
-    s = _FENCE_RE.sub("", text.strip()).strip()
+    """Parse a JSON object from model output, tolerating reasoning tags, fences, prose and trailing commas."""
+    s = strip_reasoning(text)
+    s = _FENCE_RE.sub("", s).strip()
+    candidates = [s]
+    start, end = s.find("{"), s.rfind("}")
+    if start != -1 and end > start:
+        candidates.append(s[start : end + 1])
+
+    last_err: Exception | None = None
+    for candidate in candidates:
+        for attempt_str in (candidate, _TRAILING_COMMA_RE.sub(r"\1", candidate)):
+            try:
+                obj = json.loads(attempt_str)
+            except json.JSONDecodeError as exc:
+                last_err = exc
+                continue
+            if not isinstance(obj, dict):
+                raise LLMError("expected a JSON object from the LLM")
+            return obj
+
+    if start == -1 or end <= start:
+        raise LLMError(f"no JSON object in LLM response: {text[:200]!r}")
+    raise LLMError(f"invalid JSON in LLM response: {text[:200]!r}") from last_err
+
+
+# --------------------------------------------------------------------------------------
+# Startup model verification & fallback
+# --------------------------------------------------------------------------------------
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        clean = item.strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            out.append(clean)
+    return out
+
+
+async def verify_provider_models(
+    settings: Settings,
+    llm: LLMClient,
+    stt: SpeechToText | None = None,
+    *,
+    http_client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """Check ``GET {base_url}/models`` on startup and apply fallback models if configured ones are missing."""
+    if llm.provider == "mock" or not settings.api_key:
+        msg = f"Startup model check: skipped (LLM provider={llm.provider}, model={llm.model})"
+        print(msg, flush=True)
+        log.info(msg)
+        return {"status": "skipped", "llm_model": llm.model, "stt_model": getattr(stt, "model", None)}
+
+    models_url = f"{settings.llm_base_url.rstrip('/')}/models"
+    headers = {"Authorization": f"Bearer {settings.api_key}"}
+
     try:
-        obj = json.loads(s)
-    except json.JSONDecodeError:
-        start, end = s.find("{"), s.rfind("}")
-        if start == -1 or end <= start:
-            raise LLMError(f"no JSON object in LLM response: {text[:200]!r}") from None
-        try:
-            obj = json.loads(s[start : end + 1])
-        except json.JSONDecodeError as exc:
-            raise LLMError(f"invalid JSON in LLM response: {text[:200]!r}") from exc
-    if not isinstance(obj, dict):
-        raise LLMError("expected a JSON object from the LLM")
-    return obj
+        if http_client is not None:
+            resp = await http_client.get(models_url, headers=headers, timeout=10.0)
+        else:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(models_url, headers=headers)
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception as exc:
+        msg = f"FAIL: Startup model check could not query {models_url}: {exc}"
+        print(msg, flush=True)
+        log.error(msg, exc_info=True)
+        return {"status": "fail", "error": str(exc), "llm_model": llm.model, "stt_model": getattr(stt, "model", None)}
+
+    available = {
+        str(item["id"])
+        for item in payload.get("data", [])
+        if isinstance(item, dict) and item.get("id")
+    }
+
+    # 1. Verify LLM model
+    llm_ok = False
+    if llm.model in available:
+        llm_ok = True
+        msg = f"OK: LLM model '{llm.model}' is available at {models_url}."
+        print(msg, flush=True)
+        log.info(msg)
+    else:
+        fallbacks = _dedupe([settings.llm_fallback_model, *LLM_FALLBACK_PREFERENCE])
+        chosen = next((m for m in fallbacks if m in available and m != llm.model), None)
+        if chosen:
+            warn = (
+                f"WARN: Configured LLM model '{llm.model}' not found in /models; "
+                f"falling back to '{chosen}'."
+            )
+            print(warn, flush=True)
+            log.warning(warn)
+            llm.model = chosen
+            llm_ok = True
+        else:
+            fail = (
+                f"FAIL: Configured LLM model '{llm.model}' not found in /models "
+                f"and no fallback from {fallbacks} is available."
+            )
+            print(fail, flush=True)
+            log.error(fail)
+
+    # 2. Verify STT Whisper model (if an API-backed Whisper model is configured)
+    stt_model = getattr(stt, "model", None)
+    stt_ok = True
+    if stt is not None and stt_model:
+        if stt_model in available:
+            msg = f"OK: STT model '{stt_model}' is available at {models_url}."
+            print(msg, flush=True)
+            log.info(msg)
+        else:
+            stt_fallbacks = _dedupe([settings.stt_fallback_model, *STT_FALLBACK_PREFERENCE])
+            chosen_stt = next((m for m in stt_fallbacks if m in available and m != stt_model), None)
+            if chosen_stt:
+                warn = (
+                    f"WARN: Configured STT model '{stt_model}' not found in /models; "
+                    f"falling back to '{chosen_stt}'."
+                )
+                print(warn, flush=True)
+                log.warning(warn)
+                setattr(stt, "model", chosen_stt)
+            else:
+                stt_ok = False
+                fail = (
+                    f"FAIL: Configured STT model '{stt_model}' not found in /models "
+                    f"and no fallback from {stt_fallbacks} is available."
+                )
+                print(fail, flush=True)
+                log.error(fail)
+
+    overall = "ok" if (llm_ok and stt_ok) else "fail"
+    return {
+        "status": overall,
+        "llm_model": llm.model,
+        "stt_model": getattr(stt, "model", None),
+        "available_count": len(available),
+    }
 
 
 # --------------------------------------------------------------------------------------
@@ -341,6 +571,7 @@ def build_llm(settings: Settings) -> LLMClient:
         api_key=settings.api_key,
         base_url=settings.llm_base_url,
         model=settings.llm_model,
+        reasoning_effort=settings.llm_reasoning_effort,
         timeout=settings.llm_timeout_seconds,
         max_retries=settings.llm_max_retries,
         backoff_base=settings.llm_backoff_base_seconds,
@@ -352,4 +583,3 @@ def build_llm(settings: Settings) -> LLMClient:
 @lru_cache
 def get_llm() -> LLMClient:
     return build_llm(get_settings())
-

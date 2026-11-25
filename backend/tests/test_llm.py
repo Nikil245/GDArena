@@ -1,14 +1,32 @@
-"""Unit tests for the LLM wrapper (429 retry/backoff, JSON parsing) and helpers."""
+"""Unit tests for the LLM wrapper, startup model verification, STT, scoring, and turn flow."""
 
 import asyncio
 import json
+import time
+from types import SimpleNamespace
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 
-from app.services import ai_agent, scoring
-from app.services.llm import LLMError, LLMRateLimitError, OpenAICompatibleLLM, parse_json_object
+from app.config import Settings
+from app.core.registry import generate_code
+from app.core.runtime import RoomRuntime
+from app.db import init_db, new_session
+from app.main import app
+from app.models import Role, Room
+from app.services import ai_agent, scoring, stt as stt_svc
+from app.services.llm import (
+    LLMClient,
+    LLMError,
+    LLMRateLimitError,
+    OpenAICompatibleLLM,
+    parse_json_object,
+    strip_reasoning,
+    verify_provider_models,
+)
 from app.services.personas import CORE_PERSONAS, assign_personas
+from app.services.stt import GroqWhisperSTT, MockSTT
 
 
 def _completion(content: str) -> dict:
@@ -18,9 +36,10 @@ def _completion(content: str) -> dict:
     }
 
 
-def _client(handler) -> OpenAICompatibleLLM:
+def _client(handler, *, reasoning_effort: str | None = "low") -> OpenAICompatibleLLM:
     return OpenAICompatibleLLM(
         provider="test", api_key="k", base_url="http://llm.test/v1", model="m",
+        reasoning_effort=reasoning_effort,
         max_retries=3, backoff_base=0.01, backoff_max=0.05,
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
@@ -61,11 +80,102 @@ def test_json_mode_falls_back_when_rejected() -> None:
     assert seen == [True, False]
 
 
+def test_strip_reasoning_and_reasoning_effort_fallback() -> None:
+    assert strip_reasoning("<think>internal steps</think>\nFinal answer.") == "Final answer."
+    assert strip_reasoning("<think>unclosed thinking") == ""
+
+    seen_efforts: list[object] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen_efforts.append(body.get("reasoning_effort"))
+        if "reasoning_effort" in body:
+            return httpx.Response(400, json={"error": {"message": "Unknown parameter: reasoning_effort"}})
+        return httpx.Response(200, json=_completion("<think>hmm</think>Concise point."))
+
+    out = asyncio.run(_client(handler, reasoning_effort="low").chat([{"role": "user", "content": "hi"}]))
+    assert out == "Concise point."
+    assert seen_efforts == ["low", None]
+
+
+def test_chat_json_repairs_malformed_json() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(200, json=_completion("Here is the score: relevance 8, clarity 7 (broken json)"))
+        return httpx.Response(200, json=_completion('{"relevance": 8, "clarity": 7, "content": 7, "teamwork": 8, "comment": "Good"}'))
+
+    res = asyncio.run(_client(handler).chat_json([{"role": "user", "content": "score"}]))
+    assert res["relevance"] == 8
+    assert calls["n"] == 2
+
+
 def test_parse_json_object() -> None:
     assert parse_json_object('```json\n{"x": 2}\n```') == {"x": 2}
-    assert parse_json_object('Here you go {"x": 3} thanks') == {"x": 3}
+    assert parse_json_object('Here you go {"x": 3,} thanks') == {"x": 3}
+    assert parse_json_object('<think>reason</think>{"x": 4}') == {"x": 4}
     with pytest.raises(LLMError):
         parse_json_object("no json here")
+
+
+def test_verify_provider_models_ok_and_fallback() -> None:
+    def make_client(model_ids: list[str]) -> httpx.AsyncClient:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"data": [{"id": mid} for mid in model_ids]})
+        return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    settings = Settings(groq_api_key="test-key", llm_model="openai/gpt-oss-120b", stt_model="whisper-large-v3-turbo")
+
+    # Both configured models available -> OK, unchanged
+    llm = OpenAICompatibleLLM(provider="groq", api_key="k", base_url="http://llm.test/v1", model="openai/gpt-oss-120b")
+    stt = GroqWhisperSTT(api_key="k", base_url="http://llm.test/v1", model="whisper-large-v3-turbo")
+    res_ok = asyncio.run(
+        verify_provider_models(
+            settings,
+            llm,
+            stt,
+            http_client=make_client(["openai/gpt-oss-120b", "whisper-large-v3-turbo"]),
+        )
+    )
+    assert res_ok["status"] == "ok"
+    assert llm.model == "openai/gpt-oss-120b"
+    assert stt.model == "whisper-large-v3-turbo"
+
+    # Configured models missing -> falls back to qwen/qwen3.6-27b and whisper-large-v3
+    res_fb = asyncio.run(
+        verify_provider_models(
+            settings,
+            llm,
+            stt,
+            http_client=make_client(["qwen/qwen3.6-27b", "whisper-large-v3"]),
+        )
+    )
+    assert res_fb["status"] == "ok"
+    assert llm.model == "qwen/qwen3.6-27b"
+    assert stt.model == "whisper-large-v3"
+
+
+def test_post_stt_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.api.rooms.get_stt", lambda: MockSTT())
+    client = TestClient(app)
+
+    ok_resp = client.post(
+        "/stt",
+        files={"file": ("turn.webm", b"fake-audio-bytes", "audio/webm")},
+        data={"language": "en"},
+    )
+    assert ok_resp.status_code == 200
+    assert ok_resp.json()["text"]
+    assert ok_resp.json()["source"] == "voice"
+
+    empty_resp = client.post(
+        "/stt",
+        files={"file": ("turn.webm", b"", "audio/webm")},
+    )
+    assert empty_resp.status_code == 400
+    assert empty_resp.json()["error"]["code"] == "empty_audio"
 
 
 def test_clean_speech_truncates_to_60_words() -> None:
@@ -99,3 +209,80 @@ def test_leaderboard_totals() -> None:
     assert [r["participant_id"] for r in board] == [1, 2]
     assert board[0]["total_score"] == 9 and board[1]["total_score"] == 8
 
+
+class _FailingLLM(LLMClient):
+    provider = "failing"
+    model = "fail-model"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def chat(self, messages, *, temperature=0.7, max_tokens=300, json_mode=False, purpose="generic", metadata=None):
+        self.calls += 1
+        raise LLMError("simulated failure")
+
+
+def test_turn_flow_timeout_leaderboard_and_quiet_ai_skip() -> None:
+    async def scenario() -> None:
+        init_db()
+        with new_session() as s:
+            room = Room(
+                code=generate_code(),
+                topic="Test turn flow",
+                max_participants=3,
+                duration_seconds=120,
+                turn_limit_seconds=None,
+                fill_with_ai=True,
+            )
+            s.add(room)
+            s.commit()
+            s.refresh(room)
+
+        llm = _FailingLLM()
+        settings = Settings(llm_provider="mock", default_turn_limit_seconds=60, ai_speaking_wpm=0)
+        rt = RoomRuntime(room, [], [], [], settings=settings, llm=llm, stt=stt_svc.TextOnlySTT())
+
+        human = await rt.join("Human", Role.PLAYER)
+        await rt.start(human)
+
+        # Leaderboard must include all 3 players (human + 2 AIs) right from start.
+        board = rt.leaderboard()
+        assert len(board) == 3
+        assert sum(1 for row in board if row["is_ai"]) == 2
+
+        # Human raises hand and gets the floor; default 60s turn deadline is set.
+        await rt.raise_hand(human)
+        assert rt.active is not None
+        assert rt.active.participant_id == human.id
+        assert rt.active.deadline_mono is not None
+
+        # An AI raises its hand while human speaks -> stays queued, LLM NOT called yet.
+        ai_player = next(m for m in rt.players() if m.is_ai)
+        async with rt.lock:
+            rt._ai_raise(ai_player)
+        assert ai_player.id in rt.queue
+        assert llm.calls == 0
+
+        # Simulate silent human hitting the turn deadline -> auto-skipped, queued AI gets floor.
+        skipped_events: list[dict] = []
+        orig_broadcast = rt.hub.broadcast
+        def spy_broadcast(event_type: str, data: dict) -> None:
+            if event_type == "turn_skipped":
+                skipped_events.append(data)
+            orig_broadcast(event_type, data)
+        rt.hub.broadcast = spy_broadcast  # type: ignore[method-assign]
+
+        async with rt.lock:
+            rt._on_tick(rt.active.deadline_mono + 0.1)
+        assert any(e["reason"] == "time_up" for e in skipped_events)
+        assert rt.active is not None
+        assert rt.active.participant_id == ai_player.id
+
+        # Let the failing AI turn task(s) finish -> skipped quietly (no ai_error in turn_skipped), floor released.
+        await asyncio.sleep(0.05)
+        assert rt.active is None
+        assert llm.calls >= 1
+        assert not any(e["reason"] == "ai_error" for e in skipped_events)
+        await rt.shutdown()
+
+    asyncio.run(scenario())

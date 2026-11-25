@@ -16,7 +16,8 @@ from .config import get_settings
 from .core.errors import GDError
 from .core.registry import registry
 from .db import init_db
-from .services.llm import get_llm
+from .services.llm import get_llm, verify_provider_models
+from .services.stt import get_stt
 
 settings = get_settings()
 logging.basicConfig(
@@ -31,10 +32,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_db()
     registry.recover_stale_rooms()
     llm = get_llm()
-    log.info("LLM provider=%s model=%s", llm.provider, llm.model)
+    stt = get_stt()
+    await verify_provider_models(settings, llm, stt)
+    log.info("LLM provider=%s model=%s | STT provider=%s model=%s", llm.provider, llm.model, stt.name, getattr(stt, "model", None))
     yield
     await registry.shutdown()
     await llm.aclose()
+    await stt.aclose()
 
 
 app = FastAPI(title="GD Arena API", version=__version__, lifespan=lifespan)

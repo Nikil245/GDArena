@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, File, Form, Query, UploadFile
 from fastapi.responses import JSONResponse
 
 from ..core.errors import GDError
@@ -15,9 +15,11 @@ from ..schemas import CreateRoomRequest, JoinRoomRequest, TopicCategory
 from ..services import topics
 from ..services.llm import get_llm
 from ..services.personas import ALL_PERSONAS
-from ..services.stt import get_stt
+from ..services.stt import STTError, VoiceNotSupportedError, get_stt
 
 router = APIRouter()
+
+MAX_AUDIO_BYTES = 20 * 1024 * 1024
 
 
 def _room_or_404(code: str) -> RoomRuntime:
@@ -30,7 +32,39 @@ def _room_or_404(code: str) -> RoomRuntime:
 @router.get("/health", tags=["meta"])
 async def health() -> dict[str, Any]:
     llm = get_llm()
-    return {"status": "ok", "llm_provider": llm.provider, "llm_model": llm.model, "stt_provider": get_stt().name}
+    stt = get_stt()
+    return {
+        "status": "ok",
+        "llm_provider": llm.provider,
+        "llm_model": llm.model,
+        "stt_provider": stt.name,
+        "stt_model": getattr(stt, "model", None),
+    }
+
+
+@router.post("/stt", tags=["voice"])
+async def transcribe_speech(
+    file: UploadFile = File(...),
+    language: str = Form(default="en"),
+) -> dict[str, Any]:
+    data = await file.read()
+    if not data:
+        raise GDError("empty_audio", "Audio recording is empty.", 400)
+    if len(data) > MAX_AUDIO_BYTES:
+        raise GDError("audio_too_large", "Audio recording exceeds the 20 MB limit.", 413)
+    stt = get_stt()
+    try:
+        result = await stt.transcribe(data, mime_type=file.content_type, language=language)
+    except VoiceNotSupportedError as exc:
+        raise GDError("voice_not_supported", str(exc), 400) from exc
+    except STTError as exc:
+        raise GDError("stt_error", str(exc), 400) from exc
+    return {
+        "text": result.text,
+        "source": result.source,
+        "language": result.language,
+        "model": getattr(stt, "model", None),
+    }
 
 
 @router.get("/topics", tags=["meta"])

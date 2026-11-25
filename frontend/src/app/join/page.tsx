@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { AppHeader } from "@/components/AppHeader";
 import { ApiError, fetchRoom, joinRoom } from "@/lib/api";
+import { unlockSpeech } from "@/lib/speech";
 import { loadSavedName, saveRoomSession } from "@/lib/storage";
 import type { Role, Room } from "@/lib/types";
 
@@ -26,7 +27,7 @@ function JoinRoomContent() {
 
   const [code, setCode] = useState(initialCode);
   const [name, setName] = useState("");
-  const [role, setRole] = useState<Role>(isNewlyCreated ? "moderator" : "player");
+  const [role, setRole] = useState<Role>("player");
 
   const [roomPreview, setRoomPreview] = useState<Room | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -108,6 +109,7 @@ function JoinRoomContent() {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    unlockSpeech();
     setSubmitError(null);
 
     const cleanedCode = code.trim().toUpperCase();
@@ -291,7 +293,7 @@ function JoinRoomContent() {
                     ? "All player seats are full."
                     : isAlreadyStarted
                     ? "Discussion already started."
-                    : "Take a seat, raise hand, and get scored."}
+                    : "Speak with AI peers. First player acts as host if no moderator joins."}
                 </p>
               </button>
 

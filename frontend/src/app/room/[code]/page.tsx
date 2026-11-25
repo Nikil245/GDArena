@@ -8,6 +8,8 @@ import {
   Copy,
   LogOut,
   RefreshCw,
+  Volume2,
+  VolumeX,
   Wifi,
   WifiOff,
   X,
@@ -21,6 +23,7 @@ import { RoundTable } from "@/components/RoundTable";
 import { TimerBanner } from "@/components/TimerBanner";
 import { TranscriptPanel } from "@/components/TranscriptPanel";
 import { TurnControls } from "@/components/TurnControls";
+import { useAiSpeech } from "@/hooks/useAiSpeech";
 import { useRoomSocket } from "@/hooks/useRoomSocket";
 import { clearRoomSession, loadRoomSession } from "@/lib/storage";
 import type { StoredSession } from "@/lib/types";
@@ -70,6 +73,12 @@ export default function RoomPage({ params }: RoomPageProps) {
   const you = state.you;
   const isDisconnected = state.status !== "connected";
   const canModerate = Boolean(you?.can_moderate);
+
+  const aiSpeech = useAiSpeech(
+    snapshot?.transcript,
+    snapshot?.participants,
+    snapshot?.room.status
+  );
 
   const headerRight = (
     <div className="flex flex-wrap items-center gap-2 sm:gap-3">
@@ -122,6 +131,28 @@ export default function RoomPage({ params }: RoomPageProps) {
           ? "Disconnected"
           : "Connecting..."}
       </span>
+
+      {aiSpeech.supported && (
+        <button
+          type="button"
+          onClick={aiSpeech.toggleMute}
+          title={aiSpeech.muted ? "Unmute AI voices" : "Mute AI voices"}
+          className={`inline-flex items-center gap-1 rounded border px-2.5 py-1 text-xs font-medium transition-colors duration-150 ${
+            aiSpeech.muted
+              ? "border-slate-300 bg-slate-100 text-slate-600 hover:bg-slate-200"
+              : "border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50"
+          }`}
+        >
+          {aiSpeech.muted ? (
+            <VolumeX className="h-3.5 w-3.5 text-slate-500" strokeWidth={1.75} />
+          ) : (
+            <Volume2 className="h-3.5 w-3.5 text-blue-800" strokeWidth={1.75} />
+          )}
+          <span className="hidden sm:inline">
+            {aiSpeech.muted ? "AI Muted" : "AI Voice"}
+          </span>
+        </button>
+      )}
 
       <Link
         href="/"
@@ -323,6 +354,7 @@ export default function RoomPage({ params }: RoomPageProps) {
                     room={snapshot.room}
                     participants={snapshot.participants}
                     currentSpeaker={snapshot.current_speaker}
+                    ttsSpeakingParticipantId={aiSpeech.aiSpeakingParticipantId}
                     queue={snapshot.queue}
                     youId={you?.id ?? null}
                   />
@@ -331,6 +363,7 @@ export default function RoomPage({ params }: RoomPageProps) {
                     you={you}
                     currentSpeaker={snapshot.current_speaker}
                     queue={snapshot.queue}
+                    turnRemainingSeconds={snapshot.timer.turn_remaining_seconds}
                     disabled={isDisconnected}
                     onRaiseHand={actions.raiseHand}
                     onLowerHand={() => actions.lowerHand()}

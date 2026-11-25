@@ -67,7 +67,7 @@ async def score_turn(
             ),
         },
     ]
-    data = await llm.chat_json(messages, temperature=0.2, max_tokens=200, purpose="score", metadata={"speaker": speaker})
+    data = await llm.chat_json(messages, temperature=0.2, max_tokens=512, purpose="score", metadata={"speaker": speaker})
     if not any(c in data for c in CRITERIA):
         raise LLMError(f"score JSON missing criteria: {data}")
     return TurnScore(
@@ -185,7 +185,7 @@ async def generate_feedback(
             ),
         },
     ]
-    data = await llm.chat_json(messages, temperature=0.4, max_tokens=400, purpose="report", metadata={"name": name})
+    data = await llm.chat_json(messages, temperature=0.4, max_tokens=1024, purpose="report", metadata={"name": name})
     strengths = _str_list(data.get("strengths"))
     improvements = _str_list(data.get("improvements"))
     if not strengths and not improvements:

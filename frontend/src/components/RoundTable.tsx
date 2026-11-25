@@ -8,6 +8,7 @@ interface RoundTableProps {
   room: Room;
   participants: Participant[];
   currentSpeaker: Speaker | null;
+  ttsSpeakingParticipantId?: number | null;
   queue: QueueItem[];
   youId: number | null;
 }
@@ -21,6 +22,7 @@ export function RoundTable({
   room,
   participants,
   currentSpeaker,
+  ttsSpeakingParticipantId = null,
   queue,
   youId,
 }: RoundTableProps) {
@@ -59,8 +61,12 @@ export function RoundTable({
       );
     }
 
-    const isSpeaking = currentSpeaker?.participant_id === p.id;
-    const isThinking = isSpeaking && currentSpeaker?.phase === "thinking";
+    const isSpeaking =
+      currentSpeaker?.participant_id === p.id ||
+      ttsSpeakingParticipantId === p.id;
+    const isThinking =
+      currentSpeaker?.participant_id === p.id &&
+      currentSpeaker?.phase === "thinking";
     const qPos = queuePosition.get(p.id);
     const isYou = youId !== null && p.id === youId;
 
