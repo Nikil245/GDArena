@@ -19,7 +19,7 @@ import random
 import secrets
 import time
 from collections.abc import Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -116,6 +116,20 @@ class Adjustment:
 
 
 @dataclass
+class PrefetchState:
+    participant_id: int
+    history_len: int
+    task: asyncio.Task[None]
+    text: str | None = None
+    mp3_bytes: bytes | None = None
+    audio_duration: float | None = None
+    llm_ms: float = 0.0
+    tts_ms: float = 0.0
+    ready: bool = False
+    failed: bool = False
+
+
+@dataclass
 class ActiveTurn:
     seq: int
     participant_id: int
@@ -126,6 +140,10 @@ class ActiveTurn:
     phase: str  # "thinking" (AI generating) | "speaking"
     task: asyncio.Task[None] | None = None
     entry_recorded: bool = False
+    turn_id: int | None = None
+    chosen_mono: float = field(default_factory=time.monotonic)
+    playback_done: asyncio.Event = field(default_factory=asyncio.Event)
+    playback_ended_mono: float | None = None
 
 
 class RoomRuntime:
@@ -221,6 +239,10 @@ class RoomRuntime:
         self._ends_mono: float | None = None
         self._floor_free_since = time.monotonic()
         self._tick_task: asyncio.Task[None] | None = None
+        self._gap_task: asyncio.Task[None] | None = None
+        self._ai_gap_until_mono: float = 0.0
+        self._last_audio_ended_mono: float | None = None
+        self._prefetch: PrefetchState | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         self._scoring_tasks: set[asyncio.Task[Any]] = set()
         self._rng = random.Random()
@@ -378,6 +400,7 @@ class RoomRuntime:
                 if pid in self.queue:
                     self.queue.remove(pid)
                     self._broadcast_queue()
+                    self._sync_prefetch("detach")
             self._broadcast_participants()
 
     async def handle_message(self, conn: ClientConnection, member: Member | None, msg: dict[str, Any]) -> None:
@@ -409,6 +432,8 @@ class RoomRuntime:
             await self.skip_speaker(member)
         elif mtype == "adjust_score":
             await self.adjust_score(member, _req_int(msg, "participant_id"), msg.get("delta"), msg.get("reason"))
+        elif mtype == "playback_ended":
+            await self.report_playback_ended(_opt_int(msg.get("turn_id")))
         else:
             raise GDError("unknown_type", f"Unknown message type {mtype!r}.")
 
@@ -491,6 +516,8 @@ class RoomRuntime:
             if self.active:
                 self._cancel_turn_task(self.active)
                 self.active = None
+            self._cancel_gap_task()
+            self._cancel_prefetch("room_ended")
             self.queue.clear()
             self._persist_room(status=self.status, ended_at=self.ended_at, end_reason=reason)
 
@@ -524,6 +551,9 @@ class RoomRuntime:
                 raise GDError("already_speaking", "You already have the floor.", 409)
             self._enqueue(m)
             self._broadcast_queue()
+            self._sync_prefetch("raise_hand")
+            if not m.is_ai and self.active is None:
+                self._cancel_gap_task()
             self._advance()
 
     async def lower_hand(self, m: Member, participant_id: int | None = None) -> None:
@@ -535,6 +565,20 @@ class RoomRuntime:
             if target in self.queue:
                 self.queue.remove(target)
                 self._broadcast_queue()
+                self._sync_prefetch("lower_hand")
+
+    async def report_playback_ended(self, turn_id: int | None) -> None:
+        async with self.lock:
+            a = self.active
+            if (
+                a is not None
+                and a.entry_recorded
+                and (turn_id is None or a.turn_id == turn_id)
+                and not a.playback_done.is_set()
+            ):
+                a.playback_ended_mono = time.monotonic()
+                a.playback_done.set()
+                log.info("[TIMING] room=%s turn_id=%s client reported playback_ended", self.code, a.turn_id)
 
     async def submit_turn(self, m: Member, inp: SpeechInput) -> None:
         self._require_player(m)
@@ -556,6 +600,9 @@ class RoomRuntime:
             if a is None or a.participant_id != m.id:
                 raise GDError("not_your_turn", "Your turn has already ended.", 409)
             self._record_entry(m, a, text, source=transcription.source)
+            self._last_audio_ended_mono = time.monotonic()
+            self._cancel_gap_task()
+            self._cancel_prefetch("human_submit")
             self._release_floor()
             self._advance()
 
@@ -564,6 +611,7 @@ class RoomRuntime:
             self._require_running()
             if self.active is None or self.active.participant_id != m.id:
                 raise GDError("not_your_turn", "You don't have the floor.", 409)
+            self._cancel_prefetch("yield_turn")
             self._skip_active("yielded")
             self._advance()
 
@@ -576,6 +624,8 @@ class RoomRuntime:
                 raise GDError("not_found", "No such player in this room.", 404)
             if self.active is not None:
                 raise GDError("floor_busy", "Someone is speaking. Use skip_speaker first.", 409)
+            self._cancel_gap_task()
+            self._cancel_prefetch("grant_turn")
             if participant_id in self.queue:
                 self.queue.remove(participant_id)
                 self._broadcast_queue()
@@ -587,6 +637,7 @@ class RoomRuntime:
             self._require_running()
             if self.active is None:
                 raise GDError("no_speaker", "Nobody is speaking.", 409)
+            self._cancel_prefetch("skip_speaker")
             self._skip_active("moderator_skip")
             self._advance()
 
@@ -650,13 +701,23 @@ class RoomRuntime:
             return
         popped = False
         while self.queue:
-            pid = self.queue.pop(0)
-            popped = True
+            pid = self.queue[0]
             m = self.members.get(pid)
-            if m is not None:
-                self._broadcast_queue()
-                self._begin_turn(m)
+            if m is None:
+                self.queue.pop(0)
+                popped = True
+                continue
+            # Keep natural TURN_GAP_SECONDS before an AI speaks; humans advance immediately.
+            if m.is_ai and time.monotonic() < self._ai_gap_until_mono:
+                if popped:
+                    self._broadcast_queue()
                 return
+            if not m.is_ai:
+                self._cancel_gap_task()
+            self.queue.pop(0)
+            self._broadcast_queue()
+            self._begin_turn(m)
+            return
         if popped:
             self._broadcast_queue()
 
@@ -668,6 +729,14 @@ class RoomRuntime:
         now = time.monotonic()
         started_at = utcnow()
         limit = self._effective_turn_limit()
+        has_valid_prefetch = (
+            m.is_ai
+            and self._prefetch is not None
+            and self._prefetch.participant_id == m.id
+            and self._prefetch.history_len == len(self.entries)
+            and self._prefetch.ready
+            and not self._prefetch.failed
+        )
         self.active = ActiveTurn(
             seq=self.turn_seq,
             participant_id=m.id,
@@ -675,7 +744,8 @@ class RoomRuntime:
             started_at=started_at,
             deadline_mono=now + limit if limit else None,
             deadline_at=started_at + timedelta(seconds=limit) if limit else None,
-            phase="thinking" if m.is_ai else "speaking",
+            phase="speaking" if (not m.is_ai or has_valid_prefetch) else "thinking",
+            chosen_mono=now,
         )
         self._broadcast_speaker()
         if m.is_ai:
@@ -780,8 +850,184 @@ class RoomRuntime:
         if wpm <= 0:
             return 0.0
         base = len(text.split()) / wpm * 60.0
-        # Give browser TTS a small buffer at normal speaking speeds so speech isn't clipped.
-        return max(2.0, base + 1.0) if wpm <= 200 else base
+        return max(1.0, base + self.settings.audio_end_buffer_seconds) if wpm <= 200 else base
+
+    def _cancel_gap_task(self) -> None:
+        self._ai_gap_until_mono = 0.0
+        if self._gap_task is not None and not self._gap_task.done() and self._gap_task is not asyncio.current_task():
+            self._gap_task.cancel()
+        self._gap_task = None
+
+    def _cancel_prefetch(self, reason: str) -> None:
+        pf = self._prefetch
+        if pf is None:
+            return
+        self._prefetch = None
+        if not pf.task.done() and pf.task is not asyncio.current_task():
+            pf.task.cancel()
+        log.debug("Cancelled prefetch (%s) for participant %s in room %s", reason, pf.participant_id, self.code)
+
+    def _sync_prefetch(self, reason: str) -> None:
+        """Discard stale prefetch if the queue head or history changed, then prefetch next AI if safe."""
+        if self._prefetch is not None:
+            valid = (
+                self.status == RoomStatus.RUNNING
+                and bool(self.queue)
+                and self.queue[0] == self._prefetch.participant_id
+                and self._prefetch.history_len == len(self.entries)
+                and not self._prefetch.failed
+            )
+            if not valid:
+                self._cancel_prefetch(reason)
+        self._maybe_start_prefetch()
+
+    def _maybe_start_prefetch(self) -> None:
+        """Prefetch the next queued AI ONLY while an AI turn is actively playing (never during a human turn)."""
+        if self.status != RoomStatus.RUNNING or self.active is None or not self.active.entry_recorded:
+            return
+        if not self.queue:
+            return
+        next_m = self.members.get(self.queue[0])
+        if next_m is None or not next_m.is_ai or next_m.persona is None:
+            self._cancel_prefetch("next_is_human")
+            return
+        if (
+            self._prefetch is not None
+            and self._prefetch.participant_id == next_m.id
+            and self._prefetch.history_len == len(self.entries)
+            and not self._prefetch.failed
+        ):
+            return
+        self._cancel_prefetch("superseded")
+        history = [(e.name, e.text) for e in self.entries[-ai_agent.HISTORY_TURNS :]]
+        players = [p.name for p in self.players()]
+        placeholder_task = asyncio.current_task()
+        assert placeholder_task is not None
+        pf = PrefetchState(
+            participant_id=next_m.id,
+            history_len=len(self.entries),
+            task=placeholder_task,
+        )
+        pf.task = self._spawn(self._run_prefetch(pf, next_m, players, history))
+        self._prefetch = pf
+
+    async def _run_prefetch(
+        self,
+        pf: PrefetchState,
+        m: Member,
+        participants: list[str],
+        history: list[tuple[str, str]],
+    ) -> None:
+        assert m.persona is not None
+        try:
+            t0 = time.monotonic()
+            text = await asyncio.wait_for(
+                ai_agent.generate_ai_point(
+                    self.llm,
+                    name=m.name,
+                    persona=m.persona,
+                    topic=self.topic,
+                    participants=participants,
+                    history=history,
+                ),
+                timeout=self.settings.ai_generation_timeout_seconds,
+            )
+            pf.llm_ms = (time.monotonic() - t0) * 1000.0
+            pf.text = text
+
+            t1 = time.monotonic()
+            try:
+                raw_audio = await asyncio.wait_for(
+                    self.tts.synthesize(text, voice=m.persona.voice, rate=m.persona.rate),
+                    timeout=20.0,
+                )
+                if raw_audio:
+                    pf.mp3_bytes = raw_audio
+                    pf.audio_duration = mp3_duration_seconds(raw_audio)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.error("Prefetch TTS failed for %s in room %s: %s", m.name, self.code, exc, exc_info=True)
+                pf.mp3_bytes = None
+                pf.audio_duration = None
+            pf.tts_ms = (time.monotonic() - t1) * 1000.0
+            pf.ready = True
+            log.info(
+                "[TIMING] room=%s prefetch ready for %s (llm=%.0fms tts=%.0fms)",
+                self.code,
+                m.name,
+                pf.llm_ms,
+                pf.tts_ms,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            pf.failed = True
+            log.error("Prefetch LLM failed for %s in room %s: %s", m.name, self.code, exc, exc_info=True)
+
+    def _schedule_next_after_ai(self, audio_end_mono: float) -> None:
+        """Release the floor after an AI turn and advance after TURN_GAP_SECONDS (or 0ms if human is next)."""
+        self._last_audio_ended_mono = audio_end_mono
+        self._release_floor()
+        # Clean invalid queue entries from front
+        while self.queue and self.queue[0] not in self.members:
+            self.queue.pop(0)
+        if self.queue:
+            head = self.members[self.queue[0]]
+            if not head.is_ai:
+                self._cancel_gap_task()
+                self._advance()
+                return
+        gap = self.settings.turn_gap_seconds if self.settings.ai_speaking_wpm > 0 else 0.0
+        if gap <= 0:
+            self._cancel_gap_task()
+            self._advance()
+            return
+        self._cancel_gap_task()
+        target = audio_end_mono + gap
+        self._ai_gap_until_mono = target
+        self._gap_task = self._spawn(self._advance_after_gap(target))
+
+    async def _advance_after_gap(self, target_mono: float) -> None:
+        try:
+            delay = target_mono - time.monotonic()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            async with self.lock:
+                self._gap_task = None
+                self._ai_gap_until_mono = 0.0
+                if self.status != RoomStatus.RUNNING or self.active is not None:
+                    return
+                if self.queue:
+                    self._advance()
+                    return
+                # Queue is empty: immediately let an eligible AI pick up the discussion.
+                picked = self._pick_idle_ai()
+                if picked is not None:
+                    self._ai_raise(picked)
+        except asyncio.CancelledError:
+            raise
+
+    def _pick_idle_ai(self) -> Member | None:
+        players = self.players()
+        ais = [m for m in players if m.is_ai and m.persona is not None]
+        if not ais:
+            return None
+        active_id = self.active.participant_id if self.active else None
+        candidates = [m for m in ais if m.id not in self.queue and m.id != active_id]
+        if not candidates:
+            return None
+        recent_speakers = [e.participant_id for e in self.entries[-2:]]
+        last_speaker = recent_speakers[-1] if recent_speakers else None
+        window = 1 if len(players) <= 3 else 2
+        recent = set(recent_speakers[-window:])
+        pool = (
+            [m for m in candidates if m.id not in recent]
+            or [m for m in candidates if m.id != last_speaker]
+            or candidates
+        )
+        weights = [m.persona.eagerness for m in pool]  # type: ignore[union-attr]
+        return self._rng.choices(pool, weights=weights, k=1)[0]
 
     # ==================================================================================
     # Background tasks
@@ -794,49 +1040,88 @@ class RoomRuntime:
         timeout = self.settings.ai_generation_timeout_seconds
         if turn.deadline_mono is not None:
             timeout = max(1.0, min(timeout, turn.deadline_mono - time.monotonic()))
-        try:
-            text = await asyncio.wait_for(
-                ai_agent.generate_ai_point(
-                    self.llm,
-                    name=m.name,
-                    persona=m.persona,
-                    topic=self.topic,
-                    participants=[p.name for p in self.players()],
-                    history=history,
-                ),
-                timeout=timeout,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            log.error("AI turn failed for %s in room %s: %s", m.name, self.code, exc, exc_info=True)
-            async with self.lock:
-                if self.active is turn:
-                    self._skip_active("ai_error", quiet=True)
-                    self._advance()
-            return
 
+        prefetch: PrefetchState | None = None
+        async with self.lock:
+            if (
+                self._prefetch is not None
+                and self._prefetch.participant_id == m.id
+                and self._prefetch.history_len == len(self.entries)
+                and not self._prefetch.failed
+            ):
+                prefetch = self._prefetch
+                self._prefetch = None
+
+        text: str | None = None
         mp3_bytes: bytes | None = None
         audio_duration: float | None = None
-        try:
-            raw_audio = await asyncio.wait_for(
-                self.tts.synthesize(text, voice=m.persona.voice, rate=m.persona.rate),
-                timeout=20.0,
-            )
-            if raw_audio:
-                mp3_bytes = raw_audio
-                audio_duration = mp3_duration_seconds(raw_audio)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            log.error("TTS failed for %s in room %s: %s", m.name, self.code, exc, exc_info=True)
-            mp3_bytes = None
-            audio_duration = None
+        llm_ms = 0.0
+        tts_ms = 0.0
+        used_prefetch = False
 
+        if prefetch is not None:
+            try:
+                if not prefetch.task.done():
+                    await asyncio.wait_for(asyncio.shield(prefetch.task), timeout=timeout)
+                if prefetch.ready and prefetch.text:
+                    text = prefetch.text
+                    mp3_bytes = prefetch.mp3_bytes
+                    audio_duration = prefetch.audio_duration
+                    llm_ms = prefetch.llm_ms
+                    tts_ms = prefetch.tts_ms
+                    used_prefetch = True
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning("Prefetch await failed for %s: %s", m.name, exc)
+
+        if not used_prefetch:
+            try:
+                t0 = time.monotonic()
+                text = await asyncio.wait_for(
+                    ai_agent.generate_ai_point(
+                        self.llm,
+                        name=m.name,
+                        persona=m.persona,
+                        topic=self.topic,
+                        participants=[p.name for p in self.players()],
+                        history=history,
+                    ),
+                    timeout=timeout,
+                )
+                llm_ms = (time.monotonic() - t0) * 1000.0
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.error("AI turn failed for %s in room %s: %s", m.name, self.code, exc, exc_info=True)
+                async with self.lock:
+                    if self.active is turn:
+                        self._skip_active("ai_error", quiet=True)
+                        self._advance()
+                return
+
+            t1 = time.monotonic()
+            try:
+                raw_audio = await asyncio.wait_for(
+                    self.tts.synthesize(text, voice=m.persona.voice, rate=m.persona.rate),
+                    timeout=20.0,
+                )
+                if raw_audio:
+                    mp3_bytes = raw_audio
+                    audio_duration = mp3_duration_seconds(raw_audio)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.error("TTS failed for %s in room %s: %s", m.name, self.code, exc, exc_info=True)
+                mp3_bytes = None
+                audio_duration = None
+            tts_ms = (time.monotonic() - t1) * 1000.0
+
+        assert text is not None
         async with self.lock:
             if self.active is not turn or self.status != RoomStatus.RUNNING:
                 return
-            self._record_entry(
+            entry = self._record_entry(
                 m,
                 turn,
                 text,
@@ -844,32 +1129,72 @@ class RoomRuntime:
                 audio_bytes=mp3_bytes,
                 audio_duration_seconds=audio_duration,
             )
+            turn.turn_id = entry.turn_id
+            now = time.monotonic()
+            prev_end_to_chosen = (
+                (turn.chosen_mono - self._last_audio_ended_mono) * 1000.0
+                if self._last_audio_ended_mono is not None
+                else 0.0
+            )
+            prev_end_to_ready = (
+                (now - self._last_audio_ended_mono) * 1000.0
+                if self._last_audio_ended_mono is not None
+                else 0.0
+            )
+            log.info(
+                "[TIMING] room=%s turn_id=%d speaker=%s prefetched=%s prev_end_to_chosen=%.0fms "
+                "llm=%.0fms tts=%.0fms prev_end_to_ready=%.0fms audio_dur=%s",
+                self.code,
+                entry.turn_id,
+                m.name,
+                used_prefetch,
+                prev_end_to_chosen,
+                llm_ms,
+                tts_ms,
+                prev_end_to_ready,
+                audio_duration,
+            )
+
             if audio_duration is not None and audio_duration > 0:
-                hold = audio_duration + 0.5
+                fallback_hold = audio_duration + self.settings.audio_end_buffer_seconds
             else:
-                hold = self._speaking_seconds(text)
+                fallback_hold = self._speaking_seconds(text)
             if self.turn_limit_seconds is not None and turn.deadline_mono is not None:
-                hold = min(hold, max(0.0, turn.deadline_mono - time.monotonic()))
-            elif hold > 0:
-                now = time.monotonic()
-                turn.deadline_mono = now + hold + 1.0
-                turn.deadline_at = utcnow() + timedelta(seconds=hold + 1.0)
-            if hold <= 0:
-                self._release_floor()
-                self._advance()
+                fallback_hold = min(fallback_hold, max(0.0, turn.deadline_mono - now))
+            elif fallback_hold > 0:
+                turn.deadline_mono = now + fallback_hold + 2.0
+                turn.deadline_at = utcnow() + timedelta(seconds=fallback_hold + 2.0)
+
+            if fallback_hold <= 0:
+                self._schedule_next_after_ai(now)
                 return
+
             turn.phase = "speaking"
             self._broadcast_speaker()
+            self._maybe_start_prefetch()
 
-        await asyncio.sleep(hold)  # "speaking" time (TTS playback in the voice stage)
+        try:
+            await asyncio.wait_for(turn.playback_done.wait(), timeout=fallback_hold)
+            ended_by = "client_ended"
+        except asyncio.TimeoutError:
+            ended_by = "server_timer"
+
         async with self.lock:
             if self.active is turn:
-                self._release_floor()
-                self._advance()
+                audio_end = turn.playback_ended_mono or time.monotonic()
+                log.info(
+                    "[TIMING] room=%s turn_id=%s speaker=%s ended_by=%s",
+                    self.code,
+                    turn.turn_id,
+                    m.name,
+                    ended_by,
+                )
+                self._schedule_next_after_ai(audio_end)
 
     async def _score_entry(self, entry: Entry) -> None:
         idx = self.entries.index(entry)
         context = [(e.name, e.text) for e in self.entries[max(0, idx - scoring.CONTEXT_TURNS) : idx]]
+        started = time.monotonic()
         try:
             result = await scoring.score_turn(
                 self.llm, topic=self.topic, speaker=entry.name, text=entry.text, context=context
@@ -891,6 +1216,7 @@ class RoomRuntime:
                     s.commit()
             self.hub.broadcast("turn_scored", entry.score_public())
             self._broadcast_leaderboard()
+            log.info("[TIMING] room=%s turn_id=%d scored in %.0fms", self.code, entry.turn_id, (time.monotonic() - started) * 1000.0)
 
     async def _tick_loop(self) -> None:
         assert self._started_mono is not None and self._ends_mono is not None
@@ -942,19 +1268,26 @@ class RoomRuntime:
         window = 1 if len(players) <= 3 else 2
         recent = set(recent_speakers[-window:])
 
-        floor_idle = self.active is None and not self.queue
+        # While an AI is actively speaking and queue is empty, queue the next AI early so prefetch can run.
+        if (
+            self.active is not None
+            and self.active.entry_recorded
+            and not self.queue
+            and (now - self.active.started_mono) >= 0.3
+        ):
+            picked = self._pick_idle_ai()
+            if picked is not None:
+                self._ai_raise(picked)
+            return
+
+        floor_idle = self.active is None and not self.queue and self._gap_task is None
         idle_for = now - self._floor_free_since if floor_idle else 0.0
         nudge = self.settings.ai_idle_nudge_seconds
 
         if floor_idle and idle_for >= nudge:
-            pool = (
-                [m for m in candidates if m.id not in recent]
-                or [m for m in candidates if m.id != last_speaker]
-                or candidates
-            )
-            if pool:
-                weights = [m.persona.eagerness for m in pool]  # type: ignore[union-attr]
-                self._ai_raise(self._rng.choices(pool, weights=weights, k=1)[0])
+            picked = self._pick_idle_ai()
+            if picked is not None:
+                self._ai_raise(picked)
             return
 
         ai_waiting = sum(1 for pid in self.queue if self.members[pid].is_ai)
@@ -977,6 +1310,7 @@ class RoomRuntime:
     def _ai_raise(self, m: Member) -> None:
         self._enqueue(m)
         self._broadcast_queue()
+        self._sync_prefetch("ai_raise")
         self._advance()
 
     async def _build_report(self) -> None:
@@ -1136,6 +1470,8 @@ class RoomRuntime:
         return self.status == RoomStatus.FINISHED and self.hub.client_count == 0 and self.report_status != "generating"
 
     async def shutdown(self) -> None:
+        self._cancel_gap_task()
+        self._cancel_prefetch("shutdown")
         for task in list(self._tasks):
             task.cancel()
         if self._tasks:

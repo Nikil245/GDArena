@@ -38,13 +38,15 @@ class Settings(BaseSettings):
 
     # ---- GD behaviour ----
     # Simulated speaking time for AI turns (words per minute). 150 WPM ~= 2.5 words/sec.
-    # The AI keeps the floor after its text appears so browser TTS can finish playing.
+    # Used as fallback when TTS is disabled or fails.
     ai_speaking_wpm: int = 150
     ai_generation_timeout_seconds: float = 45.0
     ai_hand_raise_multiplier: float = 1.0
     ai_idle_nudge_seconds: float = 2.5
     ai_max_queued: int = 2
     default_turn_limit_seconds: int = 60
+    turn_gap_seconds: float = 1.0
+    audio_end_buffer_seconds: float = 0.2
     human_queue_priority: bool = True
     max_human_turn_chars: int = 2000
 

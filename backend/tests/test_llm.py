@@ -426,3 +426,100 @@ def test_runtime_ai_turn_emits_audio_url_and_cleans_up_and_falls_back_on_tts_err
         await rt2.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_prefetch_playback_ended_and_human_preemption() -> None:
+    class _CountingLLM(LLMClient):
+        provider = "mock"
+        model = "mock-gd"
+
+        def __init__(self) -> None:
+            self.turn_calls: list[str] = []
+
+        async def chat(self, messages, *, temperature=0.7, max_tokens=300, json_mode=False, purpose="generic", metadata=None):
+            if purpose == "score":
+                return '{"relevance": 8, "clarity": 8, "content": 8, "teamwork": 8, "comment": "Good."}'
+            if purpose == "report":
+                return '{"strengths": ["Clear"], "improvements": ["More"], "summary": "Good."}'
+            await asyncio.sleep(0.05)
+            name = (metadata or {}).get("name", "AI")
+            self.turn_calls.append(name)
+            return f"Point from {name} about practical implementation and clear metrics."
+
+    async def scenario() -> None:
+        init_db()
+        with new_session() as s:
+            room = Room(
+                code=generate_code(),
+                topic="Prefetch test",
+                max_participants=3,
+                duration_seconds=120,
+                turn_limit_seconds=None,
+                fill_with_ai=True,
+            )
+            s.add(room)
+            s.commit()
+            s.refresh(room)
+
+        llm = _CountingLLM()
+        settings = Settings(
+            llm_provider="mock",
+            ai_speaking_wpm=150,
+            turn_gap_seconds=0.3,
+            audio_end_buffer_seconds=0.2,
+        )
+        # Use a ~2.0s silent MP3 so AI #1 stays speaking while AI #2 prefetches
+        class _TwoSecTTS(tts_svc.TextToSpeech):
+            name = "two_sec"
+            async def synthesize(self, text: str, voice: str = "en-US-JennyNeural", *, rate: str = "+0%") -> bytes:
+                return tts_svc._make_silent_mp3(frames=77)  # ~2.01s
+
+        rt = RoomRuntime(room, [], [], [], settings=settings, llm=llm, stt=stt_svc.TextOnlySTT(), tts=_TwoSecTTS())
+        human = await rt.join("Host", Role.PLAYER)
+        await rt.start(human)
+        ais = [m for m in rt.players() if m.is_ai]
+
+        # 1. Queue AI 1 and AI 2 -> AI 1 starts, AI 2 prefetches while AI 1 speaks
+        async with rt.lock:
+            rt._ai_raise(ais[0])
+            rt._ai_raise(ais[1])
+        await asyncio.sleep(0.2)
+        assert len(rt.entries) == 1
+        assert rt.active is not None and rt.active.participant_id == ais[0].id
+        assert rt._prefetch is not None and rt._prefetch.participant_id == ais[1].id
+        assert rt._prefetch.ready is True
+        calls_before_advance = len(llm.turn_calls)
+
+        # 2. Report playback_ended -> waits ~turn_gap_seconds (0.3s) then consumes prefetch (no extra LLM call)
+        await rt.report_playback_ended(rt.entries[0].turn_id)
+        await rt.report_playback_ended(rt.entries[0].turn_id)  # duplicate is harmlessly ignored
+        await asyncio.sleep(0.05)
+        assert rt.active is None  # still inside turn_gap_seconds
+        await asyncio.sleep(0.35)
+        assert len(rt.entries) == 2
+        assert rt.active is not None and rt.active.participant_id == ais[1].id
+        assert len(llm.turn_calls) == calls_before_advance  # used prefetched result!
+
+        # 3. Queue AI 1 behind AI 2 -> starts prefetching for AI 1; then human raises hand -> prefetch discarded!
+        async with rt.lock:
+            rt._ai_raise(ais[0])
+        await asyncio.sleep(0.15)
+        assert rt._prefetch is not None and rt._prefetch.participant_id == ais[0].id
+
+        await rt.raise_hand(human)
+        assert rt.queue[0] == human.id
+        assert rt._prefetch is None  # invalidated because human jumped ahead of AI 1
+
+        # 4. AI 2 finishes playback -> human gets floor immediately (0ms gap, no turn_gap_seconds wait)
+        t_end = time.monotonic()
+        await rt.report_playback_ended(rt.entries[1].turn_id)
+        await asyncio.sleep(0.05)
+        assert rt.active is not None and rt.active.participant_id == human.id
+        assert (time.monotonic() - t_end) < 0.25
+
+        # 5. Skip speaker clears any prefetch cleanly
+        await rt.skip_speaker(human)
+        assert rt._prefetch is None
+        await rt.shutdown()
+
+    asyncio.run(scenario())

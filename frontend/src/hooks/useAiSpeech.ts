@@ -17,6 +17,9 @@ interface QueuedSpeechItem {
   text: string;
   audioUrl: string | null;
   personaKey: string | null;
+  receivedPerf: number;
+  preloadedBlobUrl: string | null;
+  preloadPromise: Promise<string | null> | null;
 }
 
 export interface UseAiSpeechOptions {
@@ -25,6 +28,7 @@ export interface UseAiSpeechOptions {
   roomStatus: RoomStatus | undefined;
   welcomeCount: number;
   isHumanRecording: boolean;
+  onPlaybackEnded?: (turnId: number) => void;
 }
 
 export interface UseAiSpeechResult {
@@ -39,12 +43,20 @@ export interface UseAiSpeechResult {
   aiSpeakingParticipantId: number | null;
 }
 
+function revokeItemBlob(item: QueuedSpeechItem): void {
+  if (item.preloadedBlobUrl) {
+    URL.revokeObjectURL(item.preloadedBlobUrl);
+    item.preloadedBlobUrl = null;
+  }
+}
+
 export function useAiSpeech({
   transcript,
   participants,
   roomStatus,
   welcomeCount,
   isHumanRecording,
+  onPlaybackEnded,
 }: UseAiSpeechOptions): UseAiSpeechResult {
   const [muted, setMuted] = useState(false);
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
@@ -57,20 +69,27 @@ export function useAiSpeech({
   const queueRef = useRef<QueuedSpeechItem[]>([]);
   const playingRef = useRef(false);
   const activeAudioRef = useRef<HTMLAudioElement | null>(null);
+  const activeBlobUrlRef = useRef<string | null>(null);
   const activeTestUrlRef = useRef<string | null>(null);
   const mutedRef = useRef(muted);
   const roomStatusRef = useRef(roomStatus);
   const humanRecordingRef = useRef(isHumanRecording);
+  const onPlaybackEndedRef = useRef(onPlaybackEnded);
   const lastWelcomeCountRef = useRef<number>(0);
   const lastProcessedTurnIdRef = useRef<number>(0);
+  const lastAudioEndedPerfRef = useRef<number | null>(null);
   const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
 
   mutedRef.current = muted;
   roomStatusRef.current = roomStatus;
   humanRecordingRef.current = isHumanRecording;
+  onPlaybackEndedRef.current = onPlaybackEnded;
 
   const stopActivePlayback = useCallback((clearQueue: boolean) => {
     if (clearQueue) {
+      for (const item of queueRef.current) {
+        revokeItemBlob(item);
+      }
       queueRef.current = [];
     }
     const audio = activeAudioRef.current;
@@ -85,6 +104,10 @@ export function useAiSpeech({
         // Ignore
       }
       activeAudioRef.current = null;
+    }
+    if (activeBlobUrlRef.current) {
+      URL.revokeObjectURL(activeBlobUrlRef.current);
+      activeBlobUrlRef.current = null;
     }
     if (activeTestUrlRef.current) {
       URL.revokeObjectURL(activeTestUrlRef.current);
@@ -102,7 +125,7 @@ export function useAiSpeech({
     setAiSpeakingParticipantId(null);
   }, []);
 
-  // Load browser speechSynthesis voices asynchronously (used only as fallback when audio_url fails/is null)
+  // Load browser speechSynthesis voices asynchronously (fallback only)
   useEffect(() => {
     if (!isSpeechSupported()) return;
     const synth = window.speechSynthesis;
@@ -121,55 +144,56 @@ export function useAiSpeech({
 
   const playNextRef = useRef<() => void>(() => {});
 
-  const speakWithFallback = useCallback(
-    (item: QueuedSpeechItem): boolean => {
-      if (!hasSpeechSynthesisVoices()) {
-        return false;
-      }
-      const synth = window.speechSynthesis;
-      const available =
-        voicesRef.current.length > 0
-          ? voicesRef.current
-          : pickEnglishVoices(synth.getVoices());
-      const { voice, pitch, rate } = getPersonaVoiceSettings(
-        item.personaKey,
-        item.participantId,
-        available
-      );
-      const utterance = new SpeechSynthesisUtterance(item.text);
-      if (voice) {
-        utterance.voice = voice;
-        utterance.lang = voice.lang;
-      } else {
-        utterance.lang = "en-IN";
-      }
-      utterance.pitch = pitch;
-      utterance.rate = rate;
-      utterance.onstart = () => {
-        setAiSpeakingParticipantId(item.participantId);
-      };
-      utterance.onend = () => {
-        playingRef.current = false;
-        setAiSpeakingParticipantId(null);
-        playNextRef.current();
-      };
-      utterance.onerror = (ev) => {
-        console.error("[GDArena Audio] Fallback speechSynthesis error:", ev);
-        playingRef.current = false;
-        setAiSpeakingParticipantId(null);
-        playNextRef.current();
-      };
-      try {
-        synth.resume();
-        synth.speak(utterance);
-        return true;
-      } catch (err) {
-        console.error("[GDArena Audio] Fallback speechSynthesis failed:", err);
-        return false;
-      }
-    },
-    []
-  );
+  const speakWithFallback = useCallback((item: QueuedSpeechItem): boolean => {
+    if (!hasSpeechSynthesisVoices()) {
+      return false;
+    }
+    const synth = window.speechSynthesis;
+    const available =
+      voicesRef.current.length > 0
+        ? voicesRef.current
+        : pickEnglishVoices(synth.getVoices());
+    const { voice, pitch, rate } = getPersonaVoiceSettings(
+      item.personaKey,
+      item.participantId,
+      available
+    );
+    const utterance = new SpeechSynthesisUtterance(item.text);
+    if (voice) {
+      utterance.voice = voice;
+      utterance.lang = voice.lang;
+    } else {
+      utterance.lang = "en-IN";
+    }
+    utterance.pitch = pitch;
+    utterance.rate = rate;
+    utterance.onstart = () => {
+      setAiSpeakingParticipantId(item.participantId);
+    };
+    utterance.onend = () => {
+      lastAudioEndedPerfRef.current = performance.now();
+      playingRef.current = false;
+      setAiSpeakingParticipantId(null);
+      onPlaybackEndedRef.current?.(item.turnId);
+      playNextRef.current();
+    };
+    utterance.onerror = (ev) => {
+      console.error("[GDArena Audio] Fallback speechSynthesis error:", ev);
+      lastAudioEndedPerfRef.current = performance.now();
+      playingRef.current = false;
+      setAiSpeakingParticipantId(null);
+      onPlaybackEndedRef.current?.(item.turnId);
+      playNextRef.current();
+    };
+    try {
+      synth.resume();
+      synth.speak(utterance);
+      return true;
+    } catch (err) {
+      console.error("[GDArena Audio] Fallback speechSynthesis failed:", err);
+      return false;
+    }
+  }, []);
 
   const playNext = useCallback(() => {
     if (
@@ -186,37 +210,96 @@ export function useAiSpeech({
 
     playingRef.current = true;
 
-    if (nextItem.audioUrl) {
+    const startAudioClip = async () => {
+      if (!nextItem.audioUrl) {
+        if (speakWithFallback(nextItem)) {
+          return;
+        }
+        playingRef.current = false;
+        setAiSpeakingParticipantId(null);
+        onPlaybackEndedRef.current?.(nextItem.turnId);
+        playNextRef.current();
+        return;
+      }
+
       const fullUrl = resolveApiUrl(nextItem.audioUrl);
-      const audio = new Audio(fullUrl);
+      let playSrc = fullUrl;
+      let blobUrl: string | null = nextItem.preloadedBlobUrl;
+
+      if (!blobUrl && nextItem.preloadPromise) {
+        try {
+          blobUrl = await nextItem.preloadPromise;
+        } catch {
+          blobUrl = null;
+        }
+      }
+
+      if (
+        mutedRef.current ||
+        roomStatusRef.current !== "running" ||
+        humanRecordingRef.current
+      ) {
+        if (blobUrl) {
+          URL.revokeObjectURL(blobUrl);
+          nextItem.preloadedBlobUrl = null;
+        }
+        playingRef.current = false;
+        return;
+      }
+
+      if (blobUrl) {
+        playSrc = blobUrl;
+        activeBlobUrlRef.current = blobUrl;
+        nextItem.preloadedBlobUrl = null;
+      }
+
+      const audio = new Audio(playSrc);
       activeAudioRef.current = audio;
 
-      const finishAndAdvance = (fallback: boolean) => {
+      const finishAndAdvance = (fallback: boolean, reportEnd: boolean) => {
         if (activeAudioRef.current !== audio) return;
         activeAudioRef.current = null;
+        if (activeBlobUrlRef.current) {
+          URL.revokeObjectURL(activeBlobUrlRef.current);
+          activeBlobUrlRef.current = null;
+        }
         if (fallback && !mutedRef.current && !humanRecordingRef.current) {
           if (speakWithFallback(nextItem)) {
             return;
           }
         }
+        lastAudioEndedPerfRef.current = performance.now();
         playingRef.current = false;
         setAiSpeakingParticipantId(null);
+        if (reportEnd) {
+          onPlaybackEndedRef.current?.(nextItem.turnId);
+        }
         playNextRef.current();
       };
 
       audio.onplaying = () => {
         if (activeAudioRef.current !== audio) return;
+        const nowPerf = performance.now();
+        const prevEnd = lastAudioEndedPerfRef.current;
+        const totalGap = prevEnd !== null ? nowPerf - prevEnd : null;
+        const entryToPlay = nowPerf - nextItem.receivedPerf;
+        console.debug(
+          `[GDArena Timing] turn=${nextItem.turnId} entry->playing=${entryToPlay.toFixed(0)}ms` +
+            (totalGap !== null
+              ? ` prev_end->playing=${totalGap.toFixed(0)}ms`
+              : "")
+        );
         setAutoplayBlocked(false);
         setAiSpeakingParticipantId(nextItem.participantId);
       };
-      audio.onended = () => finishAndAdvance(false);
+      audio.onended = () => finishAndAdvance(false, true);
       audio.onerror = () => {
         console.error(
           "[GDArena Audio] HTMLAudioElement error loading/playing:",
           fullUrl,
           audio.error
         );
-        finishAndAdvance(true);
+        finishAndAdvance(true, true);
       };
 
       try {
@@ -236,6 +319,10 @@ export function useAiSpeech({
                 err
               );
               activeAudioRef.current = null;
+              if (blobUrl) {
+                nextItem.preloadedBlobUrl = blobUrl;
+                activeBlobUrlRef.current = null;
+              }
               playingRef.current = false;
               setAiSpeakingParticipantId(null);
               setAutoplayBlocked(true);
@@ -243,23 +330,16 @@ export function useAiSpeech({
               return;
             }
             console.error("[GDArena Audio] audio.play() rejected:", err);
-            finishAndAdvance(true);
+            finishAndAdvance(true, true);
           });
         }
       } catch (err) {
         console.error("[GDArena Audio] Synchronous audio.play() error:", err);
-        finishAndAdvance(true);
+        finishAndAdvance(true, true);
       }
-      return;
-    }
+    };
 
-    // No audio_url provided (e.g. server TTS failed or disabled) -> fallback to speechSynthesis if available
-    if (speakWithFallback(nextItem)) {
-      return;
-    }
-    playingRef.current = false;
-    setAiSpeakingParticipantId(null);
-    playNextRef.current();
+    void startAudioClip();
   }, [speakWithFallback]);
 
   playNextRef.current = playNext;
@@ -285,7 +365,7 @@ export function useAiSpeech({
     };
   }, [stopActivePlayback]);
 
-  // Enqueue ONLY newly arriving AI turns (never replay old turns on load or reconnect)
+  // Enqueue & preload ONLY newly arriving AI turns (never replay old turns on load or reconnect)
   useEffect(() => {
     if (!transcript) return;
 
@@ -307,16 +387,33 @@ export function useAiSpeech({
       return;
     }
 
+    const receivedPerf = performance.now();
     for (const entry of newEntries) {
       if (!entry.is_ai || !entry.text.trim()) continue;
       const member = participants?.find((p) => p.id === entry.participant_id);
-      queueRef.current.push({
+      const item: QueuedSpeechItem = {
         turnId: entry.turn_id,
         participantId: entry.participant_id,
         text: entry.text,
         audioUrl: entry.audio_url,
         personaKey: member?.persona?.key ?? null,
-      });
+        receivedPerf,
+        preloadedBlobUrl: null,
+        preloadPromise: null,
+      };
+      if (entry.audio_url) {
+        const fullUrl = resolveApiUrl(entry.audio_url);
+        item.preloadPromise = fetch(fullUrl, { cache: "no-store" })
+          .then((res) => (res.ok ? res.blob() : null))
+          .then((blob) => {
+            if (!blob) return null;
+            const url = URL.createObjectURL(blob);
+            item.preloadedBlobUrl = url;
+            return url;
+          })
+          .catch(() => null);
+      }
+      queueRef.current.push(item);
     }
 
     playNext();

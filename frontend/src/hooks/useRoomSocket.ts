@@ -41,6 +41,7 @@ export interface RoomSocketActions {
   grantTurn: (participantId: number) => void;
   skipSpeaker: () => void;
   adjustScore: (participantId: number, delta: number, reason?: string) => void;
+  reportPlaybackEnded: (turnId: number) => void;
   clearError: () => void;
   reconnectNow: () => void;
 }
@@ -641,6 +642,12 @@ export function useRoomSocket(
         }),
       [sendCommand]
     ),
+    reportPlaybackEnded: useCallback((turnId: number) => {
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "playback_ended", turn_id: turnId }));
+      }
+    }, []),
     clearError: useCallback(() => {
       setState((prev) => ({ ...prev, lastError: null }));
     }, []),

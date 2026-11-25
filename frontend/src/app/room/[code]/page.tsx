@@ -81,6 +81,7 @@ export default function RoomPage({ params }: RoomPageProps) {
     roomStatus: snapshot?.room.status,
     welcomeCount: state.welcomeCount,
     isHumanRecording,
+    onPlaybackEnded: actions.reportPlaybackEnded,
   });
 
   const headerRight = (

@@ -463,6 +463,7 @@ Before closing on auth/lookup failure, the server sends one `error` event:
 | `grant_turn` | Moderator / Host | `participant_id` | Gives the floor to a specific player when the floor is free. |
 | `skip_speaker` | Moderator / Host | — | Ends the active speaker's turn (`turn_skipped` with `reason: "moderator_skip"`) and advances. |
 | `adjust_score` | Moderator / Host (running) | `participant_id`, `delta` (`-10..10`, non-zero), `reason?` | Adds or subtracts points and updates the leaderboard. |
+| `playback_ended` | Any connected participant | `turn_id` | Notifies the server that client audio playback finished so the floor can advance after `TURN_GAP_SECONDS`. |
 
 **Voice-ready `submit_turn` example (stage 1 text vs. stage 2 audio):**
 ```json
