@@ -5,17 +5,18 @@ import { Users } from "lucide-react";
 
 interface AppHeaderProps {
   rightSlot?: React.ReactNode;
+  subHeader?: React.ReactNode;
 }
 
-export function AppHeader({ rightSlot }: AppHeaderProps) {
+export function AppHeader({ rightSlot, subHeader }: AppHeaderProps) {
   return (
-    <header className="border-b border-slate-200 bg-white">
-      <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6">
+    <header className="border-b border-line bg-surface">
+      <div className="app-container flex h-14 items-center justify-between gap-2">
         <Link
           href="/"
-          className="flex items-center gap-2.5 text-slate-900 transition-colors duration-150 hover:text-blue-800"
+          className="ui-focus flex shrink-0 items-center gap-2 rounded-chip text-ink transition-colors duration-150 hover:text-accent sm:gap-2.5"
         >
-          <span className="flex h-8 w-8 items-center justify-center rounded border border-slate-200 bg-blue-800 text-white">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-chip border border-accent bg-accent text-white">
             <Users className="h-4 w-4" strokeWidth={1.75} />
           </span>
           <span className="text-base font-semibold tracking-tight">
@@ -23,18 +24,21 @@ export function AppHeader({ rightSlot }: AppHeaderProps) {
           </span>
         </Link>
 
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 shrink-0 items-center gap-3">
           {rightSlot ?? (
-            <nav className="flex items-center gap-4 text-sm font-medium">
+            <nav
+              aria-label="Primary navigation"
+              className="flex items-center gap-2 text-sm font-medium sm:gap-3"
+            >
               <Link
                 href="/"
-                className="text-slate-600 transition-colors duration-150 hover:text-slate-900"
+                className="ui-focus inline-flex min-h-[40px] shrink-0 items-center whitespace-nowrap rounded-control px-2.5 text-ink-secondary transition-colors duration-150 hover:text-ink sm:min-h-[36px]"
               >
                 Create Room
               </Link>
               <Link
                 href="/join"
-                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-slate-700 transition-colors duration-150 hover:border-slate-400 hover:bg-slate-50"
+                className="ui-btn-secondary min-h-[40px] shrink-0 whitespace-nowrap px-3 py-1.5 text-sm sm:min-h-[36px]"
               >
                 Join Room
               </Link>
@@ -42,7 +46,8 @@ export function AppHeader({ rightSlot }: AppHeaderProps) {
           )}
         </div>
       </div>
+
+      {subHeader}
     </header>
   );
 }
-

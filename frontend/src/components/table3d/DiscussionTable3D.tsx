@@ -242,7 +242,7 @@ export function DiscussionTable3D({
       <ParticipantTagOverlay tags={tags} tagElementsRef={tagElementsRef} />
 
       {/* Flat status indicator */}
-      <div className="pointer-events-none absolute bottom-2.5 left-2.5 z-20 rounded border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700">
+      <div className="pointer-events-none absolute bottom-2.5 left-2.5 z-20 max-w-[calc(100%-20px)] truncate rounded border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700">
         {statusText}
       </div>
 

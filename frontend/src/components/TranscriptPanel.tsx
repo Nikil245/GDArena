@@ -50,18 +50,18 @@ export function TranscriptPanel({
   ].sort((a, b) => a.ts.localeCompare(b.ts));
 
   return (
-    <section className="flex flex-col rounded-md border border-slate-200 bg-white">
-      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+    <section className="ui-card flex flex-col">
+      <div className="flex items-center justify-between border-b border-line-subtle px-4 py-3">
         <div className="flex items-center gap-2">
           <MessageSquareText
-            className="h-4 w-4 text-slate-500"
+            className="h-4 w-4 text-ink-muted"
             strokeWidth={1.75}
           />
-          <h2 className="text-sm font-semibold text-slate-900">
+          <h2 className="text-card-title font-semibold text-ink">
             Live Transcript
           </h2>
         </div>
-        <span className="text-xs text-slate-500 tabular-nums">
+        <span className="text-caption text-ink-muted tabular-nums">
           {entries.length} {entries.length === 1 ? "turn" : "turns"}
         </span>
       </div>
@@ -73,10 +73,10 @@ export function TranscriptPanel({
       >
         {feed.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center text-center">
-            <p className="text-sm font-medium text-slate-500">
+            <p className="text-sm font-medium text-ink-secondary">
               No contributions yet
             </p>
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1 max-w-xs text-caption text-ink-muted">
               Spoken turns from human and AI participants will appear here in
               real time.
             </p>
@@ -87,10 +87,12 @@ export function TranscriptPanel({
               return (
                 <div
                   key={item.notice.id}
-                  className="flex items-center justify-between gap-2 rounded border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600"
+                  className="ui-card-subtle flex items-center justify-between gap-2 px-3 py-1.5 text-caption text-ink-secondary"
                 >
-                  <span>{item.notice.message}</span>
-                  <span className="shrink-0 text-[11px] text-slate-400 tabular-nums">
+                  <span className="min-w-0 break-words">
+                    {item.notice.message}
+                  </span>
+                  <span className="shrink-0 text-[11px] text-ink-muted tabular-nums">
                     {formatTime(item.notice.ts)}
                   </span>
                 </div>
@@ -101,49 +103,49 @@ export function TranscriptPanel({
             return (
               <article
                 key={e.turn_id}
-                className="rounded-md border border-slate-200 bg-white p-3"
+                className="rounded-control border border-line bg-surface p-3"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-semibold text-slate-900">
+                  <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                    <span className="truncate text-caption font-semibold text-ink">
                       {e.name}
                     </span>
                     {e.is_ai && (
-                      <span className="inline-flex items-center gap-0.5 rounded border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                      <span className="inline-flex shrink-0 items-center gap-0.5 rounded-chip border border-line bg-muted px-1.5 py-0.5 text-[10px] font-medium text-ink-secondary">
                         <Bot className="h-2.5 w-2.5" strokeWidth={1.75} />
                         AI
                       </span>
                     )}
-                    <span className="text-[11px] text-slate-400 tabular-nums">
+                    <span className="text-[11px] text-ink-muted tabular-nums">
                       #{e.seq} · {formatTime(e.ended_at)}
                     </span>
                   </div>
 
                   {e.turn_score !== null ? (
-                    <span className="rounded border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-900 tabular-nums">
+                    <span className="shrink-0 rounded-chip border border-accent-border bg-accent-soft px-2 py-0.5 text-[11px] font-semibold text-accent-text tabular-nums">
                       {formatScore(e.turn_score)} / 10
                     </span>
                   ) : (
-                    <span className="text-[11px] text-slate-400">
+                    <span className="shrink-0 text-[11px] text-ink-muted">
                       Scoring...
                     </span>
                   )}
                 </div>
 
-                <p className="mt-1.5 text-sm leading-relaxed text-slate-700">
+                <p className="mt-1.5 break-words text-sm leading-relaxed text-ink-secondary">
                   {e.text}
                 </p>
 
                 {showComments && e.scores && (
-                  <div className="mt-2 border-t border-slate-100 pt-2 text-xs">
-                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500 tabular-nums">
+                  <div className="mt-2 border-t border-line-subtle pt-2 text-caption">
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-ink-muted tabular-nums">
                       <span>Relevance: {e.scores.relevance}</span>
                       <span>Clarity: {e.scores.clarity}</span>
                       <span>Content: {e.scores.content}</span>
                       <span>Teamwork: {e.scores.teamwork}</span>
                     </div>
                     {e.comment && (
-                      <p className="mt-1 text-slate-600">{e.comment}</p>
+                      <p className="mt-1 text-ink-secondary">{e.comment}</p>
                     )}
                   </div>
                 )}
@@ -155,4 +157,3 @@ export function TranscriptPanel({
     </section>
   );
 }
-

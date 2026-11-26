@@ -13,6 +13,9 @@ import {
   User,
 } from "lucide-react";
 import { AppHeader } from "@/components/AppHeader";
+import { MicCheck } from "@/components/join/MicCheck";
+import { TablePreview } from "@/components/join/TablePreview";
+import { TipsCard } from "@/components/join/TipsCard";
 import { ApiError, fetchRoom, joinRoom } from "@/lib/api";
 import { unlockAudio } from "@/lib/speech";
 import { loadSavedName, saveRoomSession } from "@/lib/storage";
@@ -90,9 +93,18 @@ function JoinRoomContent() {
 
   useEffect(() => {
     if (!roomPreview) return;
-    if (isModeratorTaken && role === "moderator" && !isRoomFull && !isAlreadyStarted) {
+    if (
+      isModeratorTaken &&
+      role === "moderator" &&
+      !isRoomFull &&
+      !isAlreadyStarted
+    ) {
       setRole("player");
-    } else if ((isRoomFull || isAlreadyStarted) && role === "player" && !isModeratorTaken) {
+    } else if (
+      (isRoomFull || isAlreadyStarted) &&
+      role === "player" &&
+      !isModeratorTaken
+    ) {
       setRole("moderator");
     }
   }, [roomPreview, isModeratorTaken, isRoomFull, isAlreadyStarted, role]);
@@ -151,11 +163,17 @@ function JoinRoomContent() {
   };
 
   return (
-    <main className="mx-auto max-w-xl px-4 py-8 sm:px-6 sm:py-12">
+    <main className="app-container py-6 sm:py-10">
       {isNewlyCreated && initialCode && (
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-900">
+        <div
+          role="status"
+          className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-control border border-success-border bg-success-bg px-4 py-3 text-sm text-success-text"
+        >
           <div className="flex items-center gap-2">
-            <CheckCircle2 className="h-4 w-4 shrink-0 text-green-700" strokeWidth={1.75} />
+            <CheckCircle2
+              className="h-4 w-4 shrink-0 text-success-text"
+              strokeWidth={1.75}
+            />
             <span>
               Room <strong className="tracking-wider">{initialCode}</strong>{" "}
               created. Share this code with participants.
@@ -164,7 +182,7 @@ function JoinRoomContent() {
           <button
             type="button"
             onClick={copyCode}
-            className="inline-flex items-center gap-1 rounded border border-green-300 bg-white px-2.5 py-1 text-xs font-medium text-green-900 transition-colors duration-150 hover:bg-green-100"
+            className="ui-focus inline-flex min-h-[36px] items-center gap-1.5 rounded-chip border border-success-border bg-surface px-2.5 py-1 text-xs font-medium text-success-text transition-colors duration-150 hover:bg-green-100"
           >
             {copiedCode ? (
               <Check className="h-3.5 w-3.5" strokeWidth={2} />
@@ -176,181 +194,210 @@ function JoinRoomContent() {
         </div>
       )}
 
-      <section className="rounded-md border border-slate-200 bg-white p-6">
-        <div className="mb-5 border-b border-slate-200 pb-3">
-          <h1 className="text-lg font-semibold text-slate-900">
-            Join Discussion Room
-          </h1>
-          <p className="mt-0.5 text-xs text-slate-500">
-            Enter the room code, your display name, and select your role.
-          </p>
-        </div>
-
-        {submitError && (
-          <div className="mb-4 flex items-start gap-2 rounded border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm text-red-800">
-            <AlertCircle
-              className="mt-0.5 h-4 w-4 shrink-0"
-              strokeWidth={1.75}
-            />
-            <span>{submitError}</span>
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,36rem)_minmax(0,1fr)]">
+        <section className="ui-card min-w-0 p-5 sm:p-6">
+          <div className="mb-5 border-b border-line-subtle pb-3.5">
+            <h1 className="text-lg font-semibold text-ink sm:text-xl">
+              Join Discussion Room
+            </h1>
+            <p className="mt-0.5 text-caption text-ink-muted">
+              Enter the room code, your display name, and select your role.
+            </p>
           </div>
-        )}
 
-        <form onSubmit={handleSubmit} className="space-y-5">
-          <div>
-            <label
-              htmlFor="room-code"
-              className="mb-1.5 block text-sm font-medium text-slate-800"
+          {submitError && (
+            <div
+              role="alert"
+              className="mb-4 flex items-start gap-2 rounded-control border border-danger-border bg-danger-bg px-3.5 py-2.5 text-sm text-danger-text"
             >
-              Room Code
-            </label>
-            <input
-              id="room-code"
-              type="text"
-              maxLength={12}
-              value={code}
-              onChange={(e) => setCode(e.target.value.toUpperCase())}
-              placeholder="e.g. K7M9PQ"
-              className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm font-semibold uppercase tracking-widest text-slate-900 placeholder:font-normal placeholder:normal-case placeholder:tracking-normal placeholder:text-slate-400 focus:border-blue-800 focus:outline-none"
-            />
+              <AlertCircle
+                className="mt-0.5 h-4 w-4 shrink-0"
+                strokeWidth={1.75}
+              />
+              <span>{submitError}</span>
+            </div>
+          )}
 
-            {previewLoading && (
-              <p className="mt-1.5 text-xs text-slate-500">Checking room...</p>
-            )}
-            {previewError && (
-              <p className="mt-1.5 text-xs font-medium text-red-700">
-                {previewError}
-              </p>
-            )}
-            {roomPreview && (
-              <div className="mt-2.5 rounded border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
-                <p className="font-medium text-slate-900">
-                  {roomPreview.topic}
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div>
+              <label
+                htmlFor="room-code"
+                className="mb-1.5 block text-sm font-medium text-ink"
+              >
+                Room Code
+              </label>
+              <input
+                id="room-code"
+                type="text"
+                maxLength={12}
+                value={code}
+                onChange={(e) => setCode(e.target.value.toUpperCase())}
+                placeholder="e.g. K7M9PQ"
+                className="ui-input font-semibold uppercase tracking-widest placeholder:font-normal placeholder:normal-case placeholder:tracking-normal"
+              />
+
+              {previewLoading && (
+                <p className="mt-1.5 text-caption text-ink-muted">
+                  Checking room...
                 </p>
-                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-500">
-                  <span>Status: {roomPreview.status}</span>
-                  <span>
-                    Seats: {roomPreview.seats_taken}/{roomPreview.max_participants}
-                  </span>
-                  <span>
-                    Duration: {Math.round(roomPreview.duration_seconds / 60)} min
-                  </span>
+              )}
+              {previewError && (
+                <p
+                  role="alert"
+                  className="mt-1.5 text-caption font-medium text-danger-text"
+                >
+                  {previewError}
+                </p>
+              )}
+              {roomPreview && (
+                <div className="ui-card-subtle mt-2.5 p-3 text-caption text-ink-secondary">
+                  <p className="font-semibold text-ink">{roomPreview.topic}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-ink-muted">
+                    <span>Status: {roomPreview.status}</span>
+                    <span>
+                      Seats: {roomPreview.seats_taken}/
+                      {roomPreview.max_participants}
+                    </span>
+                    <span>
+                      Duration: {Math.round(roomPreview.duration_seconds / 60)}{" "}
+                      min
+                    </span>
+                  </div>
+                  {isFinished && (
+                    <p className="mt-1.5 font-medium text-danger-text">
+                      This discussion has already finished.{" "}
+                      <Link
+                        href={`/room/${encodeURIComponent(roomPreview.code)}`}
+                        className="ui-focus underline"
+                      >
+                        View results
+                      </Link>
+                    </p>
+                  )}
                 </div>
-                {isFinished && (
-                  <p className="mt-1.5 font-medium text-red-700">
-                    This discussion has already finished.{" "}
-                    <Link
-                      href={`/room/${encodeURIComponent(roomPreview.code)}`}
-                      className="underline"
-                    >
-                      View results
-                    </Link>
+              )}
+            </div>
+
+            <div>
+              <label
+                htmlFor="display-name"
+                className="mb-1.5 block text-sm font-medium text-ink"
+              >
+                Your Name
+              </label>
+              <input
+                id="display-name"
+                type="text"
+                maxLength={40}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Enter your name"
+                className="ui-input"
+              />
+            </div>
+
+            <div>
+              <span
+                id="role-label"
+                className="mb-2 block text-sm font-medium text-ink"
+              >
+                Role
+              </span>
+              <div
+                role="group"
+                aria-labelledby="role-label"
+                className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+              >
+                <button
+                  type="button"
+                  aria-pressed={role === "player"}
+                  onClick={() => setRole("player")}
+                  disabled={isRoomFull || isAlreadyStarted || isFinished}
+                  className={`ui-focus rounded-control p-3.5 text-left transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${
+                    role === "player"
+                      ? "border-2 border-accent bg-accent-soft text-accent-text"
+                      : "border border-line-input bg-surface text-ink-secondary hover:border-line-strong hover:bg-subtle"
+                  }`}
+                >
+                  <div className="flex items-center gap-2 text-sm font-semibold">
+                    <User className="h-4 w-4" strokeWidth={1.75} />
+                    Player
+                  </div>
+                  <p className="mt-1 text-caption text-ink-muted">
+                    {isRoomFull
+                      ? "All player seats are full."
+                      : isAlreadyStarted
+                      ? "Discussion already started."
+                      : "Speak with AI peers. First player acts as host if no moderator joins."}
                   </p>
-                )}
+                </button>
+
+                <button
+                  type="button"
+                  aria-pressed={role === "moderator"}
+                  onClick={() => setRole("moderator")}
+                  disabled={isModeratorTaken || isFinished}
+                  className={`ui-focus rounded-control p-3.5 text-left transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${
+                    role === "moderator"
+                      ? "border-2 border-accent bg-accent-soft text-accent-text"
+                      : "border border-line-input bg-surface text-ink-secondary hover:border-line-strong hover:bg-subtle"
+                  }`}
+                >
+                  <div className="flex items-center gap-2 text-sm font-semibold">
+                    <Shield className="h-4 w-4" strokeWidth={1.75} />
+                    Moderator
+                  </div>
+                  <p className="mt-1 text-caption text-ink-muted">
+                    {isModeratorTaken
+                      ? "A moderator has already joined."
+                      : "Start/end session, adjust scores, view comments."}
+                  </p>
+                </button>
               </div>
-            )}
-          </div>
+            </div>
 
-          <div>
-            <label
-              htmlFor="display-name"
-              className="mb-1.5 block text-sm font-medium text-slate-800"
-            >
-              Your Name
-            </label>
-            <input
-              id="display-name"
-              type="text"
-              maxLength={40}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Enter your name"
-              className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-800 focus:outline-none"
-            />
-          </div>
-
-          <div>
-            <label className="mb-2 block text-sm font-medium text-slate-800">
-              Role
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={() => setRole("player")}
-                disabled={isRoomFull || isAlreadyStarted || isFinished}
-                className={`rounded border p-3.5 text-left transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${
-                  role === "player"
-                    ? "border-blue-800 bg-blue-50 text-blue-900"
-                    : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
-                }`}
-              >
-                <div className="flex items-center gap-2 font-medium text-sm">
-                  <User className="h-4 w-4" strokeWidth={1.75} />
-                  Player
-                </div>
-                <p className="mt-1 text-xs text-slate-500">
-                  {isRoomFull
-                    ? "All player seats are full."
-                    : isAlreadyStarted
-                    ? "Discussion already started."
-                    : "Speak with AI peers. First player acts as host if no moderator joins."}
-                </p>
-              </button>
+            <div className="flex flex-col-reverse gap-3 border-t border-line-subtle pt-5 sm:flex-row sm:items-center sm:justify-between">
+              <Link href="/" className="ui-btn-secondary w-full sm:w-auto">
+                Back to setup
+              </Link>
 
               <button
-                type="button"
-                onClick={() => setRole("moderator")}
-                disabled={isModeratorTaken || isFinished}
-                className={`rounded border p-3.5 text-left transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${
-                  role === "moderator"
-                    ? "border-blue-800 bg-blue-50 text-blue-900"
-                    : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
-                }`}
+                type="submit"
+                disabled={submitting || isFinished || Boolean(previewError)}
+                className="ui-btn-primary h-11 w-full px-6 sm:w-auto"
               >
-                <div className="flex items-center gap-2 font-medium text-sm">
-                  <Shield className="h-4 w-4" strokeWidth={1.75} />
-                  Moderator
-                </div>
-                <p className="mt-1 text-xs text-slate-500">
-                  {isModeratorTaken
-                    ? "A moderator has already joined."
-                    : "Start/end session, adjust scores, view comments."}
-                </p>
+                {submitting ? "Joining..." : "Join Room"}
+                <ArrowRight className="h-4 w-4" strokeWidth={2} />
               </button>
             </div>
-          </div>
+          </form>
+        </section>
 
-          <div className="flex items-center justify-between border-t border-slate-200 pt-4">
-            <Link
-              href="/"
-              className="text-sm font-medium text-slate-600 transition-colors duration-150 hover:text-slate-900"
-            >
-              Back to setup
-            </Link>
-
-            <button
-              type="submit"
-              disabled={submitting || isFinished || Boolean(previewError)}
-              className="inline-flex items-center gap-2 rounded bg-blue-800 px-5 py-2 text-sm font-semibold text-white transition-colors duration-150 hover:bg-blue-900 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {submitting ? "Joining..." : "Join Room"}
-              <ArrowRight className="h-4 w-4" strokeWidth={2} />
-            </button>
+        <aside
+          aria-label="Room preview and preparation"
+          className="min-w-0 space-y-4"
+        >
+          <div className="hidden md:block">
+            <TablePreview room={roomPreview} />
           </div>
-        </form>
-      </section>
+          <MicCheck />
+          <TipsCard />
+        </aside>
+      </div>
     </main>
   );
 }
 
 export default function JoinPage() {
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-page">
       <AppHeader />
       <Suspense
         fallback={
-          <main className="mx-auto max-w-xl px-4 py-12 text-sm text-slate-500">
-            Loading join form...
+          <main className="app-container py-6 sm:py-10">
+            <div className="ui-card max-w-xl p-6 text-sm text-ink-muted">
+              Loading join form...
+            </div>
           </main>
         }
       >

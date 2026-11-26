@@ -1,6 +1,13 @@
 "use client";
 
-import { FormEvent, KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
+import {
+  FormEvent,
+  KeyboardEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   AlertCircle,
   Hand,
@@ -236,7 +243,9 @@ export function TurnControls({
       chunksRef.current = [];
 
       if (blob.size < MIN_AUDIO_BYTES) {
-        setVoiceError("Recording was empty. Click the microphone and speak clearly.");
+        setVoiceError(
+          "Recording was empty. Click the microphone and speak clearly."
+        );
         return;
       }
 
@@ -263,11 +272,18 @@ export function TurnControls({
 
     recorder.start(250);
     setRecording(true);
-  }, [isMyTurn, disabled, transcribing, recording, stopStreamTracks, onSubmitTurn]);
+  }, [
+    isMyTurn,
+    disabled,
+    transcribing,
+    recording,
+    stopStreamTracks,
+    onSubmitTurn,
+  ]);
 
   if (!you) {
     return (
-      <section className="rounded-md border border-slate-200 bg-white p-4 text-sm text-slate-600">
+      <section className="ui-card p-4 text-sm text-ink-muted">
         You are viewing this discussion as a read-only spectator.
       </section>
     );
@@ -275,9 +291,10 @@ export function TurnControls({
 
   if (you.role === "moderator") {
     return (
-      <section className="rounded-md border border-slate-200 bg-white p-4 text-sm text-slate-600">
-        You joined as <span className="font-medium text-slate-900">Moderator</span>. Use the
-        Moderator Panel to manage the discussion, skip turns, and adjust scores.
+      <section className="ui-card p-4 text-sm text-ink-muted">
+        You joined as <span className="font-semibold text-ink">Moderator</span>.
+        Use the Moderator Panel to manage the discussion, skip turns, and adjust
+        scores.
       </section>
     );
   }
@@ -308,15 +325,15 @@ export function TurnControls({
 
   return (
     <section
-      className={`rounded-md border bg-white p-4 transition-colors duration-150 ${
-        isMyTurn ? "border-blue-800" : "border-slate-200"
+      className={`ui-card p-4 transition-colors duration-150 ${
+        isMyTurn ? "border-2 border-accent" : ""
       }`}
     >
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span
-            className={`text-sm font-semibold ${
-              isMyTurn ? "text-blue-800" : "text-slate-900"
+            className={`text-card-title font-semibold ${
+              isMyTurn ? "text-accent-text" : "text-ink"
             }`}
           >
             {isMyTurn
@@ -333,7 +350,7 @@ export function TurnControls({
               type="button"
               onClick={onYieldTurn}
               disabled={disabled || recording || transcribing}
-              className="inline-flex items-center gap-1.5 rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors duration-150 hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="ui-btn-secondary min-h-[40px] px-3 py-1.5 text-xs sm:min-h-[36px]"
             >
               <SkipForward className="h-3.5 w-3.5" strokeWidth={1.75} />
               Yield Turn
@@ -343,7 +360,7 @@ export function TurnControls({
               type="button"
               onClick={onLowerHand}
               disabled={disabled}
-              className="inline-flex items-center gap-1.5 rounded border border-amber-300 bg-amber-50 px-3.5 py-1.5 text-xs font-semibold text-amber-900 transition-colors duration-150 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+              className="ui-focus inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-control border border-accent-border bg-accent-soft px-3.5 py-1.5 text-xs font-semibold text-accent-text transition-colors duration-150 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-[36px]"
             >
               <Hand className="h-3.5 w-3.5" strokeWidth={1.75} />
               Lower Hand (#{myQueueIndex + 1})
@@ -353,7 +370,7 @@ export function TurnControls({
               type="button"
               onClick={handleRaiseHand}
               disabled={disabled}
-              className="inline-flex items-center gap-1.5 rounded border border-blue-800 bg-blue-800 px-3.5 py-1.5 text-xs font-semibold text-white transition-colors duration-150 hover:bg-blue-900 disabled:cursor-not-allowed disabled:opacity-50"
+              className="ui-btn-primary min-h-[40px] px-3.5 py-1.5 text-xs sm:min-h-[36px]"
             >
               <Hand className="h-3.5 w-3.5" strokeWidth={1.75} />
               Raise Hand
@@ -363,8 +380,14 @@ export function TurnControls({
       </div>
 
       {voiceError && (
-        <div className="mb-3 flex items-start gap-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
-          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+        <div
+          role="alert"
+          className="mb-3 flex items-start gap-2 rounded-control border border-danger-border bg-danger-bg px-3 py-2 text-caption text-danger-text"
+        >
+          <AlertCircle
+            className="mt-0.5 h-3.5 w-3.5 shrink-0"
+            strokeWidth={1.75}
+          />
           <span>{voiceError}</span>
         </div>
       )}
@@ -375,18 +398,19 @@ export function TurnControls({
             <button
               type="button"
               onClick={stopAndSubmitRecording}
-              className="flex w-full items-center justify-center gap-3 rounded-md border border-red-800 bg-red-700 px-5 py-4 text-sm font-semibold text-white transition-colors duration-150 hover:bg-red-800"
+              className="ui-btn-destructive-solid w-full px-5 py-4"
             >
-              <Square className="h-5 w-5" strokeWidth={2} />
-              <span className="tabular-nums">
-                Recording... {formatSeconds(recordingSeconds)} — Click to Stop & Submit
+              <Square className="h-5 w-5 shrink-0" strokeWidth={2} />
+              <span className="text-center tabular-nums">
+                Recording... {formatSeconds(recordingSeconds)} — Click to Stop &
+                Submit
               </span>
             </button>
           ) : transcribing ? (
             <button
               type="button"
               disabled
-              className="flex w-full cursor-not-allowed items-center justify-center gap-2.5 rounded-md border border-slate-300 bg-slate-100 px-5 py-4 text-sm font-semibold text-slate-700"
+              className="flex w-full cursor-not-allowed items-center justify-center gap-2.5 rounded-control border border-line-input bg-muted px-5 py-4 text-sm font-semibold text-ink-secondary"
             >
               <Loader2 className="h-5 w-5 animate-spin" strokeWidth={1.75} />
               <span>Transcribing...</span>
@@ -396,13 +420,13 @@ export function TurnControls({
               type="button"
               onClick={startRecording}
               disabled={!isMyTurn || disabled}
-              className={`flex w-full items-center justify-center gap-3 rounded-md border px-5 py-4 text-sm font-semibold transition-colors duration-150 ${
+              className={`ui-focus flex w-full items-center justify-center gap-3 rounded-control border px-5 py-4 text-sm font-semibold transition-colors duration-150 ${
                 isMyTurn && !disabled
-                  ? "border-blue-800 bg-blue-800 text-white hover:bg-blue-900"
-                  : "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+                  ? "border-accent bg-accent text-white hover:border-accent-hover hover:bg-accent-hover"
+                  : "cursor-not-allowed border-line bg-muted text-ink-muted"
               }`}
             >
-              <Mic className="h-5 w-5" strokeWidth={2} />
+              <Mic className="h-5 w-5 shrink-0" strokeWidth={2} />
               <span>
                 {isMyTurn
                   ? "Click to Speak (Microphone)"
@@ -411,7 +435,7 @@ export function TurnControls({
             </button>
           )}
 
-          <div className="flex items-center justify-between text-xs text-slate-500">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-caption text-ink-muted">
             <span>
               {isMyTurn
                 ? "Click to start recording, click again when done."
@@ -420,7 +444,7 @@ export function TurnControls({
             <button
               type="button"
               onClick={() => setTextMode(true)}
-              className="shrink-0 text-xs font-medium text-slate-500 underline underline-offset-2 transition-colors duration-150 hover:text-slate-800"
+              className="ui-focus shrink-0 rounded-chip text-caption font-medium text-ink-secondary underline underline-offset-2 transition-colors duration-150 hover:text-ink"
             >
               Use text instead
             </button>
@@ -428,7 +452,11 @@ export function TurnControls({
         </div>
       ) : (
         <form onSubmit={handleTextSubmit} className="space-y-2.5">
+          <label htmlFor="debug-turn-text" className="sr-only">
+            Turn text
+          </label>
           <textarea
+            id="debug-turn-text"
             value={text}
             onChange={(e) => setText(e.target.value.slice(0, MAX_TURN_CHARS))}
             onKeyDown={handleKeyDown}
@@ -439,20 +467,20 @@ export function TurnControls({
                 ? "Debug text input: type your point and press Enter..."
                 : "Raise your hand and wait for the floor to submit."
             }
-            className="w-full resize-none rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-800 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+            className="ui-input h-auto resize-none py-2"
           />
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <button
               type="button"
               onClick={() => setTextMode(false)}
-              className="text-xs font-medium text-slate-600 underline underline-offset-2 hover:text-slate-900"
+              className="ui-focus rounded-chip text-caption font-medium text-ink-secondary underline underline-offset-2 hover:text-ink"
             >
               Use microphone
             </button>
             <button
               type="submit"
               disabled={!isMyTurn || disabled || text.trim().length === 0}
-              className="inline-flex items-center gap-1.5 rounded bg-blue-800 px-4 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-blue-900 disabled:cursor-not-allowed disabled:bg-slate-300"
+              className="ui-btn-primary min-h-[38px] px-4 py-1.5 text-sm sm:min-h-[36px]"
             >
               <Send className="h-3.5 w-3.5" strokeWidth={1.75} />
               Submit Turn

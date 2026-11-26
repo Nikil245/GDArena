@@ -40,7 +40,8 @@ export function LobbyPanel({
 
   const copyJoinLink = async () => {
     try {
-      const origin = typeof window !== "undefined" ? window.location.origin : "";
+      const origin =
+        typeof window !== "undefined" ? window.location.origin : "";
       await navigator.clipboard.writeText(`${origin}/join?code=${room.code}`);
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 1800);
@@ -50,13 +51,13 @@ export function LobbyPanel({
   };
 
   return (
-    <section className="rounded-md border border-slate-200 bg-white p-5">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 pb-4">
+    <section className="ui-card p-4 sm:p-5">
+      <div className="flex flex-col gap-4 border-b border-line-subtle pb-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-base font-semibold text-slate-900">
+          <h2 className="text-section-title font-semibold text-ink">
             Session Lobby
           </h2>
-          <p className="mt-0.5 text-sm text-slate-600">
+          <p className="mt-0.5 text-sm text-ink-muted">
             {canStart
               ? "Review joined participants and start the discussion when ready."
               : "Waiting for moderator to start the discussion."}
@@ -67,25 +68,26 @@ export function LobbyPanel({
           <button
             type="button"
             onClick={copyCode}
-            className="inline-flex items-center gap-1.5 rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors duration-150 hover:border-slate-400 hover:bg-slate-50"
+            className="ui-btn-secondary min-h-[38px] px-3 py-1.5 text-xs sm:min-h-[36px]"
           >
             {copiedCode ? (
-              <Check className="h-3.5 w-3.5 text-green-700" strokeWidth={2} />
+              <Check className="h-3.5 w-3.5 text-success-text" strokeWidth={2} />
             ) : (
-              <Copy className="h-3.5 w-3.5" strokeWidth={1.75} />
+              <Copy className="h-3.5 w-3.5 text-ink-muted" strokeWidth={1.75} />
             )}
-            Code: <span className="font-semibold tracking-wider">{room.code}</span>
+            Code:{" "}
+            <span className="font-semibold tracking-wider">{room.code}</span>
           </button>
 
           <button
             type="button"
             onClick={copyJoinLink}
-            className="inline-flex items-center gap-1.5 rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors duration-150 hover:border-slate-400 hover:bg-slate-50"
+            className="ui-btn-secondary min-h-[38px] px-3 py-1.5 text-xs sm:min-h-[36px]"
           >
             {copiedLink ? (
-              <Check className="h-3.5 w-3.5 text-green-700" strokeWidth={2} />
+              <Check className="h-3.5 w-3.5 text-success-text" strokeWidth={2} />
             ) : (
-              <Copy className="h-3.5 w-3.5" strokeWidth={1.75} />
+              <Copy className="h-3.5 w-3.5 text-ink-muted" strokeWidth={1.75} />
             )}
             {copiedLink ? "Link Copied" : "Copy Join Link"}
           </button>
@@ -93,8 +95,8 @@ export function LobbyPanel({
       </div>
 
       <div className="mt-4 grid gap-4 md:grid-cols-2">
-        <div>
-          <div className="mb-2 flex items-center justify-between text-xs font-medium uppercase tracking-wider text-slate-500">
+        <div className="min-w-0">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-caption font-medium uppercase tracking-wider text-ink-muted">
             <span className="flex items-center gap-1.5">
               <Users className="h-3.5 w-3.5" strokeWidth={1.75} />
               Joined Participants ({participants.length})
@@ -104,34 +106,43 @@ export function LobbyPanel({
             </span>
           </div>
 
-          <ul className="divide-y divide-slate-100 rounded border border-slate-200 bg-slate-50">
+          <ul className="divide-y divide-line-subtle rounded-control border border-line bg-subtle">
             {participants.length === 0 ? (
-              <li className="px-3 py-3 text-xs text-slate-500">
+              <li className="px-3 py-3 text-caption text-ink-muted">
                 No participants have joined yet.
               </li>
             ) : (
               participants.map((p) => (
                 <li
                   key={p.id}
-                  className="flex items-center justify-between px-3 py-2 text-sm"
+                  className="flex min-w-0 items-center justify-between gap-2 px-3 py-2.5 text-sm"
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     <span
-                      className={`h-2 w-2 rounded-full ${
-                        p.connected ? "bg-green-600" : "bg-slate-300"
+                      aria-hidden="true"
+                      className={`h-2 w-2 shrink-0 rounded-full ${
+                        p.connected ? "bg-green-600" : "bg-slate-400"
                       }`}
                     />
-                    <span className="font-medium text-slate-900">{p.name}</span>
+                    <span className="sr-only">
+                      {p.connected ? "Connected" : "Offline"}
+                    </span>
+                    <span className="truncate font-medium text-ink">
+                      {p.name}
+                    </span>
                     {you?.id === p.id && (
-                      <span className="text-xs font-medium text-blue-800">
+                      <span className="shrink-0 text-caption font-semibold text-accent-text">
                         (You)
                       </span>
                     )}
                   </div>
-                  <span className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-0.5 text-xs font-medium text-slate-600">
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-chip border border-line bg-surface px-2 py-0.5 text-caption font-medium text-ink-secondary">
                     {p.role === "moderator" ? (
                       <>
-                        <Shield className="h-3 w-3 text-blue-800" strokeWidth={1.75} />
+                        <Shield
+                          className="h-3 w-3 text-accent"
+                          strokeWidth={1.75}
+                        />
                         Moderator
                       </>
                     ) : (
@@ -147,12 +158,12 @@ export function LobbyPanel({
           </ul>
         </div>
 
-        <div className="flex flex-col justify-between rounded border border-slate-200 bg-slate-50 p-4">
-          <div className="space-y-2 text-xs text-slate-600">
-            <p className="font-semibold text-slate-900">Session Summary</p>
+        <div className="ui-card-subtle flex flex-col justify-between p-4">
+          <div className="space-y-2 text-caption text-ink-muted">
+            <p className="text-sm font-semibold text-ink">Session Summary</p>
             <p>
               Duration:{" "}
-              <span className="font-medium text-slate-800">
+              <span className="font-semibold text-ink">
                 {Math.round(room.duration_seconds / 60)} min
               </span>{" "}
               {room.turn_limit_seconds
@@ -161,7 +172,7 @@ export function LobbyPanel({
             </p>
             <p>
               Moderator:{" "}
-              <span className="font-medium text-slate-800">
+              <span className="font-semibold text-ink">
                 {moderator ? moderator.name : "None (first player acts as host)"}
               </span>
             </p>
@@ -174,7 +185,7 @@ export function LobbyPanel({
             )}
           </div>
 
-          <div className="mt-4 border-t border-slate-200 pt-4">
+          <div className="mt-4 border-t border-line-subtle pt-4">
             {canStart ? (
               <button
                 type="button"
@@ -183,14 +194,14 @@ export function LobbyPanel({
                   onStartGd();
                 }}
                 disabled={disabled}
-                className="inline-flex w-full items-center justify-center gap-2 rounded bg-blue-800 px-4 py-2.5 text-sm font-semibold text-white transition-colors duration-150 hover:bg-blue-900 disabled:cursor-not-allowed disabled:opacity-50"
+                className="ui-btn-primary h-11 w-full"
               >
                 <Play className="h-4 w-4" strokeWidth={2} />
                 Start Discussion
               </button>
             ) : (
-              <div className="flex items-center gap-2 rounded border border-slate-200 bg-white px-3 py-2.5 text-xs font-medium text-slate-600">
-                <Clock className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} />
+              <div className="flex items-center gap-2 rounded-control border border-line bg-surface px-3 py-2.5 text-caption font-medium text-ink-muted">
+                <Clock className="h-4 w-4 shrink-0" strokeWidth={1.75} />
                 <span>Waiting for moderator to start the GD...</span>
               </div>
             )}
@@ -200,4 +211,3 @@ export function LobbyPanel({
     </section>
   );
 }
-

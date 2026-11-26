@@ -5,17 +5,21 @@ import { useRouter } from "next/navigation";
 import {
   AlertCircle,
   ArrowRight,
+  BarChart3,
   Clock,
+  FileText,
+  Mic,
   SlidersHorizontal,
   Users,
 } from "lucide-react";
 import { AppHeader } from "@/components/AppHeader";
+import { StyledSelect, type SelectOption } from "@/components/StyledSelect";
 import { ApiError, createRoom } from "@/lib/api";
 import type { TopicCategory } from "@/lib/types";
 
 const PARTICIPANT_OPTIONS = [2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
 
-const CATEGORY_OPTIONS: { value: "" | TopicCategory; label: string }[] = [
+const CATEGORY_OPTIONS: readonly SelectOption<"" | TopicCategory>[] = [
   { value: "", label: "Any category" },
   { value: "current_affairs", label: "Current Affairs" },
   { value: "business", label: "Business & Economy" },
@@ -23,10 +27,35 @@ const CATEGORY_OPTIONS: { value: "" | TopicCategory; label: string }[] = [
   { value: "abstract", label: "Abstract" },
 ];
 
+const WHAT_YOU_GET_ITEMS = [
+  {
+    icon: Mic,
+    title: "Voice-based discussion",
+    detail: "Speak using your microphone with instant transcription.",
+  },
+  {
+    icon: Users,
+    title: "AI participants with distinct personas",
+    detail: "Open seats fill automatically with balanced viewpoints.",
+  },
+  {
+    icon: BarChart3,
+    title: "Live scoring",
+    detail: "Per-turn scores and a real-time leaderboard as you speak.",
+  },
+  {
+    icon: FileText,
+    title: "Final report",
+    detail: "Strengths, improvement areas, and full session transcript.",
+  },
+] as const;
+
 export default function HomePage() {
   const router = useRouter();
 
-  const [topicMode, setTopicMode] = useState<"custom" | "moderator">("moderator");
+  const [topicMode, setTopicMode] = useState<"custom" | "moderator">(
+    "moderator"
+  );
   const [topicText, setTopicText] = useState("");
   const [topicCategory, setTopicCategory] = useState<"" | TopicCategory>("");
   const [maxParticipants, setMaxParticipants] = useState<number>(6);
@@ -48,7 +77,11 @@ export default function HomePage() {
     }
 
     const parsedMinutes = Number(durationMinutes);
-    if (!Number.isFinite(parsedMinutes) || parsedMinutes < 0.5 || parsedMinutes > 60) {
+    if (
+      !Number.isFinite(parsedMinutes) ||
+      parsedMinutes < 0.5 ||
+      parsedMinutes > 60
+    ) {
       setError("Duration must be between 0.5 and 60 minutes.");
       return;
     }
@@ -94,35 +127,38 @@ export default function HomePage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-page">
       <AppHeader />
 
-      <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 sm:py-12">
-        <div className="mb-8">
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+      <main className="app-container py-6 sm:py-10">
+        <div className="mb-6 sm:mb-8">
+          <h1 className="text-page-title font-semibold text-ink sm:text-[28px]">
             Group Discussion Practice
           </h1>
-          <p className="mt-1.5 max-w-2xl text-sm text-slate-600">
-            Configure a structured practice room with a live moderator, server-synced
-            timer, AI participants, and per-turn evaluation.
+          <p className="mt-1.5 max-w-2xl text-sm text-ink-muted">
+            Configure a structured practice room with a live moderator,
+            server-synced timer, AI participants, and per-turn evaluation.
           </p>
         </div>
 
-        <div className="grid gap-6 lg:grid-cols-12">
+        <div className="grid items-start gap-6 lg:grid-cols-12">
           {/* Setup Form */}
-          <section className="rounded-md border border-slate-200 bg-white p-6 lg:col-span-8">
-            <div className="mb-5 border-b border-slate-200 pb-3">
-              <h2 className="text-base font-semibold text-slate-900">
+          <section className="ui-card p-5 sm:p-6 lg:col-span-8">
+            <div className="mb-5 border-b border-line-subtle pb-3.5">
+              <h2 className="text-section-title font-semibold text-ink">
                 Create a Discussion Room
               </h2>
-              <p className="mt-0.5 text-xs text-slate-500">
+              <p className="mt-0.5 text-caption text-ink-muted">
                 Empty seats are automatically filled by distinct AI personas when
                 the moderator starts the session.
               </p>
             </div>
 
             {error && (
-              <div className="mb-5 flex items-start gap-2.5 rounded border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm text-red-800">
+              <div
+                role="alert"
+                className="mb-5 flex items-start gap-2.5 rounded-control border border-danger-border bg-danger-bg px-3.5 py-2.5 text-sm text-danger-text"
+              >
                 <AlertCircle
                   className="mt-0.5 h-4 w-4 shrink-0"
                   strokeWidth={1.75}
@@ -134,38 +170,47 @@ export default function HomePage() {
             <form onSubmit={handleCreate} className="space-y-6">
               {/* Topic Selection */}
               <div>
-                <label className="mb-2 block text-sm font-medium text-slate-800">
+                <span
+                  id="topic-mode-label"
+                  className="mb-2 block text-sm font-medium text-ink"
+                >
                   Discussion Topic
-                </label>
-                <div className="grid grid-cols-2 gap-2.5">
+                </span>
+                <div
+                  role="group"
+                  aria-labelledby="topic-mode-label"
+                  className="grid grid-cols-1 gap-2.5 sm:grid-cols-2"
+                >
                   <button
                     type="button"
+                    aria-pressed={topicMode === "moderator"}
                     onClick={() => setTopicMode("moderator")}
-                    className={`rounded border px-3.5 py-2.5 text-left text-sm transition-colors duration-150 ${
+                    className={`ui-focus rounded-control px-3.5 py-3 text-left text-sm transition-colors duration-150 ${
                       topicMode === "moderator"
-                        ? "border-blue-800 bg-blue-50 text-blue-900"
-                        : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+                        ? "border-2 border-accent bg-accent-soft text-accent-text"
+                        : "border border-line-input bg-surface text-ink-secondary hover:border-line-strong hover:bg-subtle"
                     }`}
                   >
-                    <span className="block font-medium">
+                    <span className="block font-semibold">
                       Let moderator choose
                     </span>
-                    <span className="mt-0.5 block text-xs text-slate-500">
+                    <span className="mt-0.5 block text-caption text-ink-muted">
                       Random pick from topic bank
                     </span>
                   </button>
 
                   <button
                     type="button"
+                    aria-pressed={topicMode === "custom"}
                     onClick={() => setTopicMode("custom")}
-                    className={`rounded border px-3.5 py-2.5 text-left text-sm transition-colors duration-150 ${
+                    className={`ui-focus rounded-control px-3.5 py-3 text-left text-sm transition-colors duration-150 ${
                       topicMode === "custom"
-                        ? "border-blue-800 bg-blue-50 text-blue-900"
-                        : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+                        ? "border-2 border-accent bg-accent-soft text-accent-text"
+                        : "border border-line-input bg-surface text-ink-secondary hover:border-line-strong hover:bg-subtle"
                     }`}
                   >
-                    <span className="block font-medium">Custom topic</span>
-                    <span className="mt-0.5 block text-xs text-slate-500">
+                    <span className="block font-semibold">Custom topic</span>
+                    <span className="mt-0.5 block text-caption text-ink-muted">
                       Enter your own prompt
                     </span>
                   </button>
@@ -173,67 +218,81 @@ export default function HomePage() {
 
                 {topicMode === "custom" ? (
                   <div className="mt-3">
+                    <label
+                      htmlFor="custom-topic"
+                      className="mb-1.5 block text-caption font-medium text-ink-secondary"
+                    >
+                      Custom topic prompt
+                    </label>
                     <input
+                      id="custom-topic"
                       type="text"
                       maxLength={300}
                       value={topicText}
                       onChange={(e) => setTopicText(e.target.value)}
                       placeholder="e.g., Should companies adopt a four-day work week?"
-                      className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-800 focus:outline-none"
+                      className="ui-input"
                     />
                   </div>
                 ) : (
                   <div className="mt-3">
-                    <label
-                      htmlFor="topic-category"
-                      className="mb-1 block text-xs font-medium text-slate-600"
+                    <span
+                      id="topic-category-label"
+                      className="mb-1.5 block text-caption font-medium text-ink-secondary"
                     >
                       Topic category (optional)
-                    </label>
-                    <select
+                    </span>
+                    <StyledSelect
                       id="topic-category"
+                      ariaLabelledBy="topic-category-label"
                       value={topicCategory}
-                      onChange={(e) =>
-                        setTopicCategory(e.target.value as "" | TopicCategory)
-                      }
-                      className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-800 focus:outline-none"
-                    >
-                      {CATEGORY_OPTIONS.map((opt) => (
-                        <option key={opt.value || "any"} value={opt.value}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
+                      options={CATEGORY_OPTIONS}
+                      onChange={setTopicCategory}
+                    />
                   </div>
                 )}
               </div>
 
               {/* Participants Selector */}
               <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <label className="flex items-center gap-1.5 text-sm font-medium text-slate-800">
-                    <Users className="h-4 w-4 text-slate-500" strokeWidth={1.75} />
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <span
+                    id="participants-label"
+                    className="flex items-center gap-1.5 text-sm font-medium text-ink"
+                  >
+                    <Users
+                      className="h-4 w-4 text-ink-muted"
+                      strokeWidth={1.75}
+                    />
                     Participants
-                  </label>
-                  <span className="text-xs font-medium text-slate-500">
+                  </span>
+                  <span className="text-caption font-medium text-ink-muted">
                     {maxParticipants} seats (human + AI)
                   </span>
                 </div>
-                <div className="grid grid-cols-9 gap-1.5">
-                  {PARTICIPANT_OPTIONS.map((count) => (
-                    <button
-                      key={count}
-                      type="button"
-                      onClick={() => setMaxParticipants(count)}
-                      className={`rounded border py-2 text-sm font-medium tabular-nums transition-colors duration-150 ${
-                        maxParticipants === count
-                          ? "border-blue-800 bg-blue-800 text-white"
-                          : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
-                      }`}
-                    >
-                      {count}
-                    </button>
-                  ))}
+                <div
+                  role="group"
+                  aria-labelledby="participants-label"
+                  className="grid grid-cols-3 gap-2 sm:grid-cols-9"
+                >
+                  {PARTICIPANT_OPTIONS.map((count) => {
+                    const selected = maxParticipants === count;
+                    return (
+                      <button
+                        key={count}
+                        type="button"
+                        aria-pressed={selected}
+                        onClick={() => setMaxParticipants(count)}
+                        className={`ui-focus h-10 rounded-control border text-sm font-medium tabular-nums transition-colors duration-150 ${
+                          selected
+                            ? "border-accent bg-accent font-semibold text-white"
+                            : "border-line-input bg-surface text-ink hover:border-line-strong hover:bg-subtle"
+                        }`}
+                      >
+                        {count}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -242,9 +301,12 @@ export default function HomePage() {
                 <div>
                   <label
                     htmlFor="duration-minutes"
-                    className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-800"
+                    className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-ink"
                   >
-                    <Clock className="h-4 w-4 text-slate-500" strokeWidth={1.75} />
+                    <Clock
+                      className="h-4 w-4 text-ink-muted"
+                      strokeWidth={1.75}
+                    />
                     Duration (minutes)
                   </label>
                   <input
@@ -255,51 +317,71 @@ export default function HomePage() {
                     step={0.5}
                     value={durationMinutes}
                     onChange={(e) => setDurationMinutes(e.target.value)}
-                    className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 tabular-nums focus:border-blue-800 focus:outline-none"
+                    className="ui-input tabular-nums"
                   />
-                  <div className="mt-1.5 flex gap-1.5">
-                    {[5, 10, 15, 20].map((m) => (
-                      <button
-                        key={m}
-                        type="button"
-                        onClick={() => setDurationMinutes(String(m))}
-                        className={`rounded border px-2 py-0.5 text-xs transition-colors duration-150 ${
-                          Number(durationMinutes) === m
-                            ? "border-blue-800 bg-blue-50 font-medium text-blue-900"
-                            : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                        }`}
-                      >
-                        {m}m
-                      </button>
-                    ))}
+                  <div
+                    role="group"
+                    aria-label="Duration shortcuts"
+                    className="mt-2 grid grid-cols-4 gap-2"
+                  >
+                    {[5, 10, 15, 20].map((m) => {
+                      const selected = Number(durationMinutes) === m;
+                      return (
+                        <button
+                          key={m}
+                          type="button"
+                          aria-pressed={selected}
+                          onClick={() => setDurationMinutes(String(m))}
+                          className={`ui-focus h-10 rounded-control border text-xs tabular-nums transition-colors duration-150 ${
+                            selected
+                              ? "border-accent bg-accent-soft font-semibold text-accent-text"
+                              : "border-line-input bg-surface font-medium text-ink-secondary hover:border-line-strong hover:bg-subtle"
+                          }`}
+                        >
+                          {m}m
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
-                <div>
-                  <div className="mb-1.5 flex items-center justify-between">
+                <div className="ui-card-subtle flex flex-col justify-between p-3.5">
+                  <div className="mb-2 flex items-center justify-between gap-2">
                     <label
                       htmlFor="turn-limit-toggle"
-                      className="flex items-center gap-1.5 text-sm font-medium text-slate-800"
+                      className="flex cursor-pointer items-center gap-1.5 text-sm font-medium text-ink"
                     >
                       <SlidersHorizontal
-                        className="h-4 w-4 text-slate-500"
+                        className="h-4 w-4 text-ink-muted"
                         strokeWidth={1.75}
                       />
                       Per-turn limit
                     </label>
-                    <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-slate-600">
+                    <label className="inline-flex min-h-[28px] cursor-pointer items-center gap-2 text-caption font-medium text-ink-secondary">
                       <input
                         id="turn-limit-toggle"
                         type="checkbox"
                         checked={turnLimitEnabled}
                         onChange={(e) => setTurnLimitEnabled(e.target.checked)}
-                        className="h-4 w-4 rounded border-slate-300 text-blue-800 focus:ring-blue-800"
+                        className="ui-focus h-4 w-4 rounded border-line-input accent-accent"
                       />
-                      {turnLimitEnabled ? "Enabled" : "Off"}
+                      <span
+                        className={`rounded-chip border px-1.5 py-0.5 text-[11px] font-semibold ${
+                          turnLimitEnabled
+                            ? "border-accent-border bg-accent-soft text-accent-text"
+                            : "border-line bg-surface text-ink-muted"
+                        }`}
+                      >
+                        {turnLimitEnabled ? "Active" : "Off"}
+                      </span>
                     </label>
                   </div>
 
+                  <label htmlFor="turn-limit-seconds" className="sr-only">
+                    Seconds per turn
+                  </label>
                   <input
+                    id="turn-limit-seconds"
                     type="number"
                     min={10}
                     max={600}
@@ -308,21 +390,21 @@ export default function HomePage() {
                     value={turnLimitSeconds}
                     onChange={(e) => setTurnLimitSeconds(e.target.value)}
                     placeholder="Seconds per turn"
-                    className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 tabular-nums focus:border-blue-800 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                    className="ui-input tabular-nums"
                   />
-                  <p className="mt-1.5 text-xs text-slate-500">
+                  <p className="mt-2 text-caption text-ink-muted">
                     {turnLimitEnabled
                       ? "10 to 600 seconds per speaker turn."
-                      : "Optional cap on how long each speaker can hold the floor."}
+                      : "Enable above to cap how long each speaker holds the floor."}
                   </p>
                 </div>
               </div>
 
-              <div className="border-t border-slate-200 pt-4">
+              <div className="border-t border-line-subtle pt-5">
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded bg-blue-800 px-5 py-2.5 text-sm font-semibold text-white transition-colors duration-150 hover:bg-blue-900 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                  className="ui-btn-primary h-11 w-full px-6 sm:w-auto"
                 >
                   {submitting ? "Creating Room..." : "Create Room"}
                   <ArrowRight className="h-4 w-4" strokeWidth={2} />
@@ -331,32 +413,38 @@ export default function HomePage() {
             </form>
           </section>
 
-          {/* Secondary card: Join Existing Room */}
+          {/* Secondary column: Join, What you get, How it runs */}
           <aside className="space-y-4 lg:col-span-4">
-            <section className="rounded-md border border-slate-200 bg-white p-5">
-              <h2 className="text-sm font-semibold text-slate-900">
+            <section className="ui-card p-5">
+              <h2 className="text-card-title font-semibold text-ink">
                 Join an Existing Room
               </h2>
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-1 text-caption text-ink-muted">
                 Already have a 6-character room code? Enter it to join as a
                 player or moderator.
               </p>
 
               <form onSubmit={handleQuickJoin} className="mt-4 space-y-3">
-                <input
-                  type="text"
-                  maxLength={12}
-                  value={joinCodeInput}
-                  onChange={(e) =>
-                    setJoinCodeInput(e.target.value.toUpperCase())
-                  }
-                  placeholder="Room code (e.g. K7M9PQ)"
-                  className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium uppercase tracking-wider text-slate-900 placeholder:font-normal placeholder:normal-case placeholder:tracking-normal placeholder:text-slate-400 focus:border-blue-800 focus:outline-none"
-                />
+                <div>
+                  <label htmlFor="quick-join-code" className="sr-only">
+                    Room code
+                  </label>
+                  <input
+                    id="quick-join-code"
+                    type="text"
+                    maxLength={12}
+                    value={joinCodeInput}
+                    onChange={(e) =>
+                      setJoinCodeInput(e.target.value.toUpperCase())
+                    }
+                    placeholder="Room code (e.g. K7M9PQ)"
+                    className="ui-input font-semibold uppercase tracking-widest placeholder:font-normal placeholder:normal-case placeholder:tracking-normal"
+                  />
+                </div>
                 <button
                   type="submit"
                   disabled={!joinCodeInput.trim()}
-                  className="inline-flex w-full items-center justify-center gap-1.5 rounded border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 transition-colors duration-150 hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="ui-btn-secondary w-full"
                 >
                   Continue to Join
                   <ArrowRight className="h-4 w-4" strokeWidth={1.75} />
@@ -364,8 +452,37 @@ export default function HomePage() {
               </form>
             </section>
 
-            <section className="rounded-md border border-slate-200 bg-white p-5 text-xs text-slate-600">
-              <h3 className="font-semibold text-slate-900">How a Session Runs</h3>
+            <section className="ui-card p-5">
+              <h2 className="text-card-title font-semibold text-ink">
+                What you get
+              </h2>
+              <ul className="mt-3 space-y-2.5">
+                {WHAT_YOU_GET_ITEMS.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <li key={item.title} className="flex items-start gap-2.5">
+                      <Icon
+                        className="mt-0.5 h-4 w-4 shrink-0 text-accent"
+                        strokeWidth={1.75}
+                      />
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-ink">
+                          {item.title}
+                        </p>
+                        <p className="text-caption text-ink-muted">
+                          {item.detail}
+                        </p>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+
+            <section className="ui-card p-5 text-caption text-ink-secondary">
+              <h2 className="text-card-title font-semibold text-ink">
+                How a Session Runs
+              </h2>
               <ol className="mt-2.5 list-decimal space-y-1.5 pl-4">
                 <li>Create a room and share the room code with participants.</li>
                 <li>
@@ -388,4 +505,3 @@ export default function HomePage() {
     </div>
   );
 }
-

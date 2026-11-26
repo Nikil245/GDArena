@@ -23,47 +23,51 @@ export function TimerBanner({
     timer.turn_remaining_seconds <= 10;
 
   return (
-    <section className="rounded-md border border-slate-200 bg-white p-4 sm:p-5">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+    <section className="ui-card p-4 sm:p-5">
+      <div className="flex flex-col gap-3.5 lg:flex-row lg:items-center lg:justify-between lg:gap-4">
         <div className="min-w-0 flex-1">
-          <div className="mb-1.5 flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500">
-            <span className="inline-flex items-center gap-1 uppercase tracking-wider text-slate-500">
+          <div className="mb-1.5 flex flex-wrap items-center gap-2 text-xs font-medium text-ink-muted">
+            <span className="inline-flex items-center gap-1 uppercase tracking-wider">
               <MessageSquare className="h-3.5 w-3.5" strokeWidth={1.75} />
               Discussion Topic
             </span>
             {room.topic_source === "bank" ? (
-              <span className="rounded border border-slate-200 bg-slate-100 px-2 py-0.5 text-slate-700">
+              <span className="rounded-chip border border-line bg-muted px-2 py-0.5 text-ink-secondary">
                 {formatCategory(room.topic_category)}
               </span>
             ) : (
-              <span className="rounded border border-slate-200 bg-slate-100 px-2 py-0.5 text-slate-700">
+              <span className="rounded-chip border border-line bg-muted px-2 py-0.5 text-ink-secondary">
                 Custom Topic
               </span>
             )}
           </div>
-          <h1 className="text-lg font-semibold leading-snug text-slate-900 sm:text-xl">
+          <h1 className="break-words text-lg font-semibold leading-snug text-ink sm:text-xl">
             {room.topic}
           </h1>
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-stretch gap-3">
+        <div className="flex w-full shrink-0 items-stretch gap-2.5 sm:w-auto sm:gap-3">
           {(timer.turn_limit_seconds !== null ||
             (currentSpeaker !== null &&
               timer.turn_remaining_seconds !== null)) && (
             <div
-              className={`flex min-w-[118px] flex-col justify-center rounded-md border px-3.5 py-2 ${
+              className={`flex min-w-0 flex-1 flex-col justify-center rounded-control border px-3 py-2 sm:min-w-[122px] sm:flex-none sm:px-3.5 ${
                 isLowTurn
-                  ? "border-red-300 bg-red-50"
-                  : "border-slate-200 bg-slate-50"
+                  ? "border-danger-border bg-danger-bg"
+                  : "border-line-subtle bg-subtle"
               }`}
             >
-              <span className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-slate-500">
-                <Timer className="h-3 w-3" strokeWidth={1.75} />
-                Turn Limit
+              <span
+                className={`flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider ${
+                  isLowTurn ? "text-danger-text" : "text-ink-muted"
+                }`}
+              >
+                <Timer className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+                <span className="truncate">Turn Limit</span>
               </span>
               <span
-                className={`mt-0.5 text-2xl font-semibold leading-none tabular-nums ${
-                  isLowTurn ? "text-red-700" : "text-slate-900"
+                className={`mt-0.5 text-xl font-semibold leading-none tabular-nums sm:text-2xl ${
+                  isLowTurn ? "text-danger-text" : "text-ink"
                 }`}
               >
                 {currentSpeaker && timer.turn_remaining_seconds !== null
@@ -74,23 +78,29 @@ export function TimerBanner({
           )}
 
           <div
-            className={`flex min-w-[144px] flex-col justify-center rounded-md border px-4 py-2 ${
+            className={`flex min-w-0 flex-1 flex-col justify-center rounded-control border px-3 py-2 sm:min-w-[144px] sm:flex-none sm:px-4 ${
               isLowTime
-                ? "border-red-300 bg-red-50"
-                : "border-slate-300 bg-slate-50"
+                ? "border-danger-border bg-danger-bg"
+                : "border-line bg-subtle"
             }`}
           >
-            <span className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-slate-500">
-              <Clock className="h-3 w-3" strokeWidth={1.75} />
-              {room.status === "lobby"
-                ? "Session Length"
-                : room.status === "finished"
-                ? "Time Remaining"
-                : "Time Left"}
+            <span
+              className={`flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider ${
+                isLowTime ? "text-danger-text" : "text-ink-muted"
+              }`}
+            >
+              <Clock className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+              <span className="truncate">
+                {room.status === "lobby"
+                  ? "Session Length"
+                  : room.status === "finished"
+                  ? "Time Remaining"
+                  : "Time Left"}
+              </span>
             </span>
             <span
-              className={`mt-0.5 text-3xl font-semibold leading-none tabular-nums ${
-                isLowTime ? "text-red-700" : "text-slate-900"
+              className={`mt-0.5 text-2xl font-semibold leading-none tabular-nums sm:text-3xl ${
+                isLowTime ? "text-danger-text" : "text-ink"
               }`}
             >
               {formatSeconds(timer.remaining_seconds)}
@@ -101,4 +111,3 @@ export function TimerBanner({
     </section>
   );
 }
-

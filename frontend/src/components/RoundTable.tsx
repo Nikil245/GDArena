@@ -19,7 +19,7 @@ const DiscussionTable3D = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="flex h-[270px] w-full items-center justify-center rounded border border-slate-200 bg-slate-50 text-xs font-medium text-slate-500 sm:h-[430px] lg:h-[470px]">
+      <div className="flex h-[270px] w-full items-center justify-center rounded-control border border-line bg-subtle text-caption font-medium text-ink-muted sm:h-[430px] lg:h-[470px]">
         Loading 3D Discussion Table...
       </div>
     ),
@@ -102,22 +102,24 @@ export function RoundTable({
   );
 
   return (
-    <section className="rounded-md border border-slate-200 bg-white p-4">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
-        <div className="flex flex-wrap items-center gap-2.5">
-          <h2 className="text-sm font-semibold text-slate-900">
+    <section className="ui-card p-3 sm:p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-line-subtle pb-2.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-2.5">
+          <h2 className="text-card-title font-semibold text-ink">
             Discussion Table
           </h2>
-          <span className="text-xs text-slate-500">
+          <span className="text-caption text-ink-muted">
             {players.length}/{room.max_participants} seats
           </span>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5 text-xs text-slate-500">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 text-caption text-ink-muted sm:gap-2.5">
           {queue.length > 0 && (
-            <span className="inline-flex items-center gap-1 rounded border border-amber-200 bg-amber-50 px-2 py-0.5 font-medium text-amber-900">
-              <Hand className="h-3 w-3" strokeWidth={1.75} />
-              Queue: {queue.map((q) => q.name).join(", ")}
+            <span className="inline-flex max-w-full items-center gap-1 rounded-chip border border-accent-border bg-accent-soft px-2 py-0.5 font-medium text-accent-text">
+              <Hand className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+              <span className="truncate">
+                Queue: {queue.map((q) => q.name).join(", ")}
+              </span>
             </span>
           )}
 
@@ -125,7 +127,7 @@ export function RoundTable({
           <div
             role="group"
             aria-label="Discussion table view mode"
-            className="inline-flex rounded border border-slate-200 bg-slate-50 p-0.5"
+            className="inline-flex shrink-0 rounded-chip border border-line bg-subtle p-0.5"
           >
             <button
               type="button"
@@ -137,26 +139,26 @@ export function RoundTable({
                   ? "Show 3D conference table"
                   : "3D view unavailable on this device"
               }
-              className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium transition-colors duration-150 ${
+              className={`ui-focus inline-flex min-h-[36px] items-center gap-1 whitespace-nowrap rounded-chip px-2.5 py-1.5 text-[11px] font-medium transition-colors duration-150 sm:min-h-[28px] sm:px-2.5 sm:py-1 ${
                 showing3D
-                  ? "bg-white text-slate-900 shadow-sm"
-                  : "text-slate-600 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-45"
+                  ? "bg-surface font-semibold text-ink shadow-card"
+                  : "text-ink-muted hover:text-ink disabled:cursor-not-allowed disabled:opacity-45"
               }`}
             >
-              <Box className="h-3 w-3" strokeWidth={1.75} />
+              <Box className="h-3 w-3 shrink-0" strokeWidth={1.75} />
               3D view
             </button>
             <button
               type="button"
               onClick={() => handleSelectView("2d")}
               aria-pressed={mounted && !showing3D}
-              className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium transition-colors duration-150 ${
+              className={`ui-focus inline-flex min-h-[36px] items-center gap-1 whitespace-nowrap rounded-chip px-2.5 py-1.5 text-[11px] font-medium transition-colors duration-150 sm:min-h-[28px] sm:px-2.5 sm:py-1 ${
                 mounted && !showing3D
-                  ? "bg-white text-slate-900 shadow-sm"
-                  : "text-slate-600 hover:text-slate-900"
+                  ? "bg-surface font-semibold text-ink shadow-card"
+                  : "text-ink-muted hover:text-ink"
               }`}
             >
-              <LayoutGrid className="h-3 w-3" strokeWidth={1.75} />
+              <LayoutGrid className="h-3 w-3 shrink-0" strokeWidth={1.75} />
               2D view
             </button>
           </div>
@@ -164,13 +166,13 @@ export function RoundTable({
       </div>
 
       {fallbackNotice && (
-        <div className="mb-3 rounded border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
+        <div className="ui-card-subtle mb-3 px-3 py-1.5 text-caption text-ink-secondary">
           3D view unavailable in this browser — showing 2D table.
         </div>
       )}
 
       {!mounted ? (
-        <div className="flex h-[270px] w-full items-center justify-center rounded border border-slate-200 bg-slate-50 text-xs font-medium text-slate-500 sm:h-[430px] lg:h-[470px]">
+        <div className="flex h-[270px] w-full items-center justify-center rounded-control border border-line bg-subtle text-caption font-medium text-ink-muted sm:h-[430px] lg:h-[470px]">
           Preparing Discussion Table...
         </div>
       ) : showing3D ? (
