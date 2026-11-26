@@ -11,6 +11,7 @@ import {
   Square,
 } from "lucide-react";
 import { ApiError, transcribeAudio } from "@/lib/api";
+import { connectMicStream } from "@/lib/audioLevel";
 import { formatSeconds } from "@/lib/format";
 import { unlockAudio } from "@/lib/speech";
 import type { Participant, QueueItem, Speaker } from "@/lib/types";
@@ -63,6 +64,7 @@ export function TurnControls({
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const micDisconnectRef = useRef<(() => void) | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const discardOnStopRef = useRef(false);
 
@@ -75,6 +77,10 @@ export function TurnControls({
   const isHandRaised = myQueueIndex !== -1;
 
   const stopStreamTracks = useCallback(() => {
+    if (micDisconnectRef.current) {
+      micDisconnectRef.current();
+      micDisconnectRef.current = null;
+    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
@@ -191,6 +197,7 @@ export function TurnControls({
     }
 
     streamRef.current = stream;
+    micDisconnectRef.current = connectMicStream(stream);
     chunksRef.current = [];
     discardOnStopRef.current = false;
 

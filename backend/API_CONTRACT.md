@@ -236,33 +236,37 @@ Server health and active provider info.
   "llm_model": "openai/gpt-oss-120b",
   "stt_provider": "whisper",
   "stt_model": "whisper-large-v3-turbo",
-  "tts_provider": "edge"
+  "tts_provider": "groq",
+  "tts_model": "canopylabs/orpheus-v1-english",
+  "tts_accent_preference": "neutral"
 }
 ```
 
 ---
 
-### `GET /audio/{room_code}/{turn_id}.mp3`
-Serve the synthesized MP3 clip for an AI turn.
+### `GET /audio/{room_code}/{turn_id}.{ext}`
+Serve the synthesized WAV (`.wav`) or MP3 (`.mp3`) clip for an AI turn.
 
-- **200 OK:** `audio/mpeg` binary stream (`Cache-Control: no-store`).
+- **200 OK:** `audio/wav` or `audio/mpeg` binary stream (`Cache-Control: no-store`).
 - **404 Not Found:** `audio_not_found` (clip does not exist or was cleaned up when the room ended).
 
 ---
 
 ### `POST /tts/test`
-Synthesize a short MP3 voice sample to verify server-side TTS playback.
+Synthesize a short WAV or MP3 voice sample to verify server-side TTS playback (supports per-persona and per-provider testing).
 
 - **Request body (optional):**
 ```json
 {
-  "voice": "en-IN-NeerjaNeural",
+  "persona": "calm_analyst",
+  "provider": "groq",
+  "voice": "diana",
   "text": "Hello! Server-side AI voice playback is working in GDArena.",
   "rate": "+0%"
 }
 ```
-- **200 OK:** `audio/mpeg` binary stream (`X-TTS-Voice`, `X-Audio-Duration` headers).
-- **400 Bad Request:** `tts_disabled` (`TTS_PROVIDER=none`)
+- **200 OK:** `audio/wav` or `audio/mpeg` binary stream (`X-TTS-Provider`, `X-TTS-Voice`, `X-Audio-Format`, `X-Audio-Duration` headers).
+- **400 Bad Request:** `tts_disabled` (`TTS_PROVIDER=none`) | `unknown_persona`
 - **502 Bad Gateway:** `tts_error`
 
 ---

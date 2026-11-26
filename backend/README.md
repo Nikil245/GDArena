@@ -32,7 +32,7 @@ backend/
 │   │   ├── personas.py      # Distinct AI personas (5 core + 5 extra for up to 10 seats)
 │   │   ├── topics.py        # Topic bank loader
 │   │   ├── stt.py           # Speech-to-text (Groq Whisper + faster-whisper stub)
-│   │   └── tts.py           # Server-side Text-to-Speech (EdgeTTS + temp MP3 cleanup)
+│   │   └── tts.py           # Server-side TTS (Groq Orpheus WAV + Edge TTS fallback & cooldown)
 │   └── data/
 │       └── topics.json      # 37 GD topics across 4 categories
 ├── scripts/
@@ -77,6 +77,9 @@ LLM_REASONING_EFFORT=low
 STT_PROVIDER=whisper
 STT_MODEL=whisper-large-v3-turbo
 STT_FALLBACK_MODEL=whisper-large-v3
+TTS_PROVIDER=groq
+GROQ_TTS_MODEL=canopylabs/orpheus-v1-english
+TTS_ACCENT_PREFERENCE=neutral
 ```
 
 > **No API key yet?** Set `LLM_PROVIDER=mock` (or leave `GROQ_API_KEY` empty) to run with the built-in offline `MockLLM`.

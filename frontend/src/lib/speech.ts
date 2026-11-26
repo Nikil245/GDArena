@@ -3,6 +3,8 @@
  * All browser globals are strictly guarded for SSR safety.
  */
 
+import { resumeAudioAnalyserContext } from "./audioLevel";
+
 export interface PersonaVoiceProfile {
   voiceIndexOffset: number;
   pitch: number;
@@ -92,6 +94,7 @@ export function unlockAudio(): void {
     }
   }
   unlockSpeech();
+  resumeAudioAnalyserContext();
 }
 
 export function pickEnglishVoices(

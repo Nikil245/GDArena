@@ -164,13 +164,24 @@ export function resolveApiUrl(path: string): string {
   return `${getApiBaseUrl()}${normalized}`;
 }
 
-export async function fetchTestVoice(voice?: string): Promise<Blob> {
+export interface TestVoiceOptions {
+  persona?: string;
+  provider?: "groq" | "edge";
+  voice?: string;
+  text?: string;
+}
+
+export async function fetchTestVoice(
+  options?: string | TestVoiceOptions
+): Promise<Blob> {
+  const payload: TestVoiceOptions =
+    typeof options === "string" ? { voice: options } : options ?? {};
   let response: Response;
   try {
     response = await fetch(`${getApiBaseUrl()}/tts/test`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(voice ? { voice } : {}),
+      body: JSON.stringify(payload),
       cache: "no-store",
     });
   } catch {

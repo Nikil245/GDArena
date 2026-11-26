@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import json
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -54,7 +55,12 @@ class Settings(BaseSettings):
     stt_provider: str = "whisper"  # whisper | faster_whisper (stub) | text | mock
     stt_model: str = "whisper-large-v3-turbo"
     stt_fallback_model: str = "whisper-large-v3"
-    tts_provider: str = "edge"  # edge | none | mock
+    tts_provider: str = "groq"  # groq | edge | none | mock
+    groq_tts_model: str = "canopylabs/orpheus-v1-english"
+    tts_accent_preference: str = "neutral"  # neutral | indian
+    tts_timeout_seconds: float = 20.0
+    tts_cooldown_seconds: float = 60.0
+    tts_voice_map: str = ""  # Optional JSON dict or comma-separated key=voice overrides
 
     @property
     def api_key(self) -> str | None:
@@ -63,6 +69,32 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()] or ["*"]
+
+    def parsed_tts_voice_map(self) -> dict[str, str]:
+        raw = self.tts_voice_map.strip()
+        if not raw:
+            return {}
+        if raw.startswith("{"):
+            try:
+                loaded = json.loads(raw)
+                if isinstance(loaded, dict):
+                    return {
+                        str(k).strip().lower(): str(v).strip()
+                        for k, v in loaded.items()
+                        if str(k).strip() and str(v).strip()
+                    }
+            except json.JSONDecodeError:
+                return {}
+        out: dict[str, str] = {}
+        for part in raw.split(","):
+            if "=" not in part:
+                continue
+            k, v = part.split("=", 1)
+            k_clean = k.strip().lower()
+            v_clean = v.strip()
+            if k_clean and v_clean:
+                out[k_clean] = v_clean
+        return out
 
 
 @lru_cache

@@ -36,19 +36,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     stt = get_stt()
     tts = get_tts()
     await verify_provider_models(settings, llm, stt)
-    await verify_tts_voices(tts)
+    await verify_tts_voices(tts, settings)
     log.info(
-        "LLM provider=%s model=%s | STT provider=%s model=%s | TTS provider=%s",
+        "LLM provider=%s model=%s | STT provider=%s model=%s | TTS provider=%s model=%s accent=%s",
         llm.provider,
         llm.model,
         stt.name,
         getattr(stt, "model", None),
         tts.name,
+        getattr(tts, "model", None),
+        settings.tts_accent_preference,
     )
     yield
     await registry.shutdown()
     await llm.aclose()
     await stt.aclose()
+    await tts.aclose()
 
 
 app = FastAPI(title="GD Arena API", version=__version__, lifespan=lifespan)

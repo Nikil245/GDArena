@@ -1,7 +1,10 @@
 import type { StoredSession } from "./types";
 
+export type TableViewMode = "3d" | "2d";
+
 const SESSION_PREFIX = "gdarena:session:";
 const PROFILE_KEY = "gdarena:player_profile";
+const TABLE_VIEW_KEY = "gdarena:table_view_mode";
 
 function keyForRoom(code: string): string {
   return `${SESSION_PREFIX}${code.trim().toUpperCase()}`;
@@ -115,6 +118,25 @@ export function loadSavedName(): string {
     return typeof parsed.name === "string" ? parsed.name : "";
   } catch {
     return "";
+  }
+}
+
+export function loadTableViewMode(): TableViewMode {
+  if (!isBrowser()) return "3d";
+  try {
+    const raw = window.localStorage.getItem(TABLE_VIEW_KEY);
+    return raw === "2d" ? "2d" : "3d";
+  } catch {
+    return "3d";
+  }
+}
+
+export function saveTableViewMode(mode: TableViewMode): void {
+  if (!isBrowser()) return;
+  try {
+    window.localStorage.setItem(TABLE_VIEW_KEY, mode);
+  } catch {
+    // Ignore storage quota / privacy mode errors
   }
 }
 

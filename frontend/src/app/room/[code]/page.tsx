@@ -402,6 +402,7 @@ export default function RoomPage({ params }: RoomPageProps) {
                     participants={snapshot.participants}
                     currentSpeaker={snapshot.current_speaker}
                     ttsSpeakingParticipantId={aiSpeech.aiSpeakingParticipantId}
+                    isHumanRecording={isHumanRecording}
                     queue={snapshot.queue}
                     youId={you?.id ?? null}
                   />

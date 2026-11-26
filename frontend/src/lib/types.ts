@@ -37,6 +37,8 @@ export interface Persona {
   name?: string;
   voice?: string;
   rate?: string;
+  groq_voice?: string | null;
+  indian_voice?: string;
 }
 
 export interface Room {
@@ -231,6 +233,8 @@ export interface HealthResponse {
   stt_provider: string;
   stt_model?: string | null;
   tts_provider?: string;
+  tts_model?: string | null;
+  tts_accent_preference?: string;
 }
 
 export interface SttResponse {

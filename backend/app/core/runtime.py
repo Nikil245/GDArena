@@ -32,7 +32,7 @@ from ..services import ai_agent, scoring
 from ..services.llm import LLMClient, get_llm
 from ..services.personas import Persona, assign_personas, get_persona
 from ..services.stt import SpeechInput, SpeechToText, STTError, VoiceNotSupportedError, get_stt, resolve_speech
-from ..services.tts import TextToSpeech, cleanup_room_audio, get_tts, mp3_duration_seconds, save_turn_audio
+from ..services.tts import TextToSpeech, cleanup_room_audio, get_tts, save_turn_audio
 from ..timeutil import iso, utcnow
 from .errors import GDError
 from .hub import ClientConnection, RoomHub
@@ -121,8 +121,11 @@ class PrefetchState:
     history_len: int
     task: asyncio.Task[None]
     text: str | None = None
-    mp3_bytes: bytes | None = None
+    tts_text: str | None = None
+    audio_bytes: bytes | None = None
+    audio_ext: str | None = None
     audio_duration: float | None = None
+    audio_provider: str | None = None
     llm_ms: float = 0.0
     tts_ms: float = 0.0
     ready: bool = False
@@ -759,6 +762,7 @@ class RoomRuntime:
         *,
         source: str,
         audio_bytes: bytes | None = None,
+        audio_ext: str | None = None,
         audio_duration_seconds: float | None = None,
     ) -> Entry:
         ended = utcnow()
@@ -781,8 +785,9 @@ class RoomRuntime:
         audio_url: str | None = None
         if audio_bytes and turn_id > 0:
             try:
-                save_turn_audio(self.code, turn_id, audio_bytes)
-                audio_url = f"/audio/{self.code}/{turn_id}.mp3"
+                saved = save_turn_audio(self.code, turn_id, audio_bytes, ext=audio_ext)
+                ext = saved.suffix.lstrip(".") or (audio_ext or "mp3")
+                audio_url = f"/audio/{self.code}/{turn_id}.{ext}"
             except Exception as exc:
                 log.error("Failed to save audio for turn %s in room %s: %s", turn_id, self.code, exc, exc_info=True)
                 audio_url = None
@@ -921,8 +926,8 @@ class RoomRuntime:
         assert m.persona is not None
         try:
             t0 = time.monotonic()
-            text = await asyncio.wait_for(
-                ai_agent.generate_ai_point(
+            gen = await asyncio.wait_for(
+                ai_agent.generate_ai_turn(
                     self.llm,
                     name=m.name,
                     persona=m.persona,
@@ -933,31 +938,39 @@ class RoomRuntime:
                 timeout=self.settings.ai_generation_timeout_seconds,
             )
             pf.llm_ms = (time.monotonic() - t0) * 1000.0
-            pf.text = text
+            pf.text = gen.text
+            pf.tts_text = gen.tts_text
 
             t1 = time.monotonic()
             try:
-                raw_audio = await asyncio.wait_for(
-                    self.tts.synthesize(text, voice=m.persona.voice, rate=m.persona.rate),
-                    timeout=20.0,
+                synth = await asyncio.wait_for(
+                    self.tts.synthesize_for_persona(gen.tts_text, persona=m.persona),
+                    timeout=self.settings.tts_timeout_seconds,
                 )
-                if raw_audio:
-                    pf.mp3_bytes = raw_audio
-                    pf.audio_duration = mp3_duration_seconds(raw_audio)
+                if synth and synth.data:
+                    pf.audio_bytes = synth.data
+                    pf.audio_ext = synth.ext
+                    pf.audio_duration = synth.duration_seconds
+                    pf.audio_provider = synth.provider
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 log.error("Prefetch TTS failed for %s in room %s: %s", m.name, self.code, exc, exc_info=True)
-                pf.mp3_bytes = None
+                pf.audio_bytes = None
+                pf.audio_ext = None
                 pf.audio_duration = None
+                pf.audio_provider = None
             pf.tts_ms = (time.monotonic() - t1) * 1000.0
             pf.ready = True
             log.info(
-                "[TIMING] room=%s prefetch ready for %s (llm=%.0fms tts=%.0fms)",
+                "[TIMING] room=%s prefetch ready for %s (provider=%s ext=%s llm=%.0fms tts=%.0fms dur=%s)",
                 self.code,
                 m.name,
+                pf.audio_provider,
+                pf.audio_ext,
                 pf.llm_ms,
                 pf.tts_ms,
+                pf.audio_duration,
             )
         except asyncio.CancelledError:
             raise
@@ -1053,8 +1066,11 @@ class RoomRuntime:
                 self._prefetch = None
 
         text: str | None = None
-        mp3_bytes: bytes | None = None
+        tts_text: str | None = None
+        audio_bytes: bytes | None = None
+        audio_ext: str | None = None
         audio_duration: float | None = None
+        audio_provider: str | None = None
         llm_ms = 0.0
         tts_ms = 0.0
         used_prefetch = False
@@ -1065,8 +1081,11 @@ class RoomRuntime:
                     await asyncio.wait_for(asyncio.shield(prefetch.task), timeout=timeout)
                 if prefetch.ready and prefetch.text:
                     text = prefetch.text
-                    mp3_bytes = prefetch.mp3_bytes
+                    tts_text = prefetch.tts_text
+                    audio_bytes = prefetch.audio_bytes
+                    audio_ext = prefetch.audio_ext
                     audio_duration = prefetch.audio_duration
+                    audio_provider = prefetch.audio_provider
                     llm_ms = prefetch.llm_ms
                     tts_ms = prefetch.tts_ms
                     used_prefetch = True
@@ -1078,8 +1097,8 @@ class RoomRuntime:
         if not used_prefetch:
             try:
                 t0 = time.monotonic()
-                text = await asyncio.wait_for(
-                    ai_agent.generate_ai_point(
+                gen = await asyncio.wait_for(
+                    ai_agent.generate_ai_turn(
                         self.llm,
                         name=m.name,
                         persona=m.persona,
@@ -1089,6 +1108,8 @@ class RoomRuntime:
                     ),
                     timeout=timeout,
                 )
+                text = gen.text
+                tts_text = gen.tts_text
                 llm_ms = (time.monotonic() - t0) * 1000.0
             except asyncio.CancelledError:
                 raise
@@ -1102,19 +1123,23 @@ class RoomRuntime:
 
             t1 = time.monotonic()
             try:
-                raw_audio = await asyncio.wait_for(
-                    self.tts.synthesize(text, voice=m.persona.voice, rate=m.persona.rate),
-                    timeout=20.0,
+                synth = await asyncio.wait_for(
+                    self.tts.synthesize_for_persona(tts_text, persona=m.persona),
+                    timeout=self.settings.tts_timeout_seconds,
                 )
-                if raw_audio:
-                    mp3_bytes = raw_audio
-                    audio_duration = mp3_duration_seconds(raw_audio)
+                if synth and synth.data:
+                    audio_bytes = synth.data
+                    audio_ext = synth.ext
+                    audio_duration = synth.duration_seconds
+                    audio_provider = synth.provider
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 log.error("TTS failed for %s in room %s: %s", m.name, self.code, exc, exc_info=True)
-                mp3_bytes = None
+                audio_bytes = None
+                audio_ext = None
                 audio_duration = None
+                audio_provider = None
             tts_ms = (time.monotonic() - t1) * 1000.0
 
         assert text is not None
@@ -1126,7 +1151,8 @@ class RoomRuntime:
                 turn,
                 text,
                 source="ai",
-                audio_bytes=mp3_bytes,
+                audio_bytes=audio_bytes,
+                audio_ext=audio_ext,
                 audio_duration_seconds=audio_duration,
             )
             turn.turn_id = entry.turn_id
@@ -1142,12 +1168,14 @@ class RoomRuntime:
                 else 0.0
             )
             log.info(
-                "[TIMING] room=%s turn_id=%d speaker=%s prefetched=%s prev_end_to_chosen=%.0fms "
-                "llm=%.0fms tts=%.0fms prev_end_to_ready=%.0fms audio_dur=%s",
+                "[TIMING] room=%s turn_id=%d speaker=%s prefetched=%s tts=%s/%s prev_end_to_chosen=%.0fms "
+                "llm=%.0fms tts_ms=%.0fms prev_end_to_ready=%.0fms audio_dur=%s",
                 self.code,
                 entry.turn_id,
                 m.name,
                 used_prefetch,
+                audio_provider,
+                audio_ext,
                 prev_end_to_chosen,
                 llm_ms,
                 tts_ms,

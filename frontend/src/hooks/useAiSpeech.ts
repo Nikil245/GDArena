@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, fetchTestVoice, resolveApiUrl } from "@/lib/api";
 import {
+  connectAiAudioElement,
+  resumeAudioAnalyserContext,
+} from "@/lib/audioLevel";
+import {
   getPersonaVoiceSettings,
   hasSpeechSynthesisVoices,
   isSpeechSupported,
@@ -71,6 +75,7 @@ export function useAiSpeech({
   const activeAudioRef = useRef<HTMLAudioElement | null>(null);
   const activeBlobUrlRef = useRef<string | null>(null);
   const activeTestUrlRef = useRef<string | null>(null);
+  const aiAudioDisconnectRef = useRef<(() => void) | null>(null);
   const mutedRef = useRef(muted);
   const roomStatusRef = useRef(roomStatus);
   const humanRecordingRef = useRef(isHumanRecording);
@@ -85,7 +90,15 @@ export function useAiSpeech({
   humanRecordingRef.current = isHumanRecording;
   onPlaybackEndedRef.current = onPlaybackEnded;
 
+  const disconnectAiAnalyser = useCallback(() => {
+    if (aiAudioDisconnectRef.current) {
+      aiAudioDisconnectRef.current();
+      aiAudioDisconnectRef.current = null;
+    }
+  }, []);
+
   const stopActivePlayback = useCallback((clearQueue: boolean) => {
+    disconnectAiAnalyser();
     if (clearQueue) {
       for (const item of queueRef.current) {
         revokeItemBlob(item);
@@ -123,7 +136,7 @@ export function useAiSpeech({
     playingRef.current = false;
     setTestingVoice(false);
     setAiSpeakingParticipantId(null);
-  }, []);
+  }, [disconnectAiAnalyser]);
 
   // Load browser speechSynthesis voices asynchronously (fallback only)
   useEffect(() => {
@@ -253,11 +266,18 @@ export function useAiSpeech({
         nextItem.preloadedBlobUrl = null;
       }
 
-      const audio = new Audio(playSrc);
+      const audio = new Audio();
+      if (!playSrc.startsWith("blob:") && !playSrc.startsWith("data:")) {
+        audio.crossOrigin = "anonymous";
+      }
+      audio.src = playSrc;
       activeAudioRef.current = audio;
+      disconnectAiAnalyser();
+      aiAudioDisconnectRef.current = connectAiAudioElement(audio);
 
       const finishAndAdvance = (fallback: boolean, reportEnd: boolean) => {
         if (activeAudioRef.current !== audio) return;
+        disconnectAiAnalyser();
         activeAudioRef.current = null;
         if (activeBlobUrlRef.current) {
           URL.revokeObjectURL(activeBlobUrlRef.current);
@@ -279,6 +299,7 @@ export function useAiSpeech({
 
       audio.onplaying = () => {
         if (activeAudioRef.current !== audio) return;
+        resumeAudioAnalyserContext();
         const nowPerf = performance.now();
         const prevEnd = lastAudioEndedPerfRef.current;
         const totalGap = prevEnd !== null ? nowPerf - prevEnd : null;
@@ -318,6 +339,7 @@ export function useAiSpeech({
                 "[GDArena Audio] Autoplay blocked by browser (NotAllowedError):",
                 err
               );
+              disconnectAiAnalyser();
               activeAudioRef.current = null;
               if (blobUrl) {
                 nextItem.preloadedBlobUrl = blobUrl;
@@ -340,7 +362,7 @@ export function useAiSpeech({
     };
 
     void startAudioClip();
-  }, [speakWithFallback]);
+  }, [disconnectAiAnalyser, speakWithFallback]);
 
   playNextRef.current = playNext;
 
@@ -404,7 +426,22 @@ export function useAiSpeech({
       if (entry.audio_url) {
         const fullUrl = resolveApiUrl(entry.audio_url);
         item.preloadPromise = fetch(fullUrl, { cache: "no-store" })
-          .then((res) => (res.ok ? res.blob() : null))
+          .then(async (res) => {
+            if (!res.ok) return null;
+            const rawBlob = await res.blob();
+            const headerType = res.headers
+              .get("content-type")
+              ?.split(";")[0]
+              .trim();
+            const inferredType =
+              headerType ||
+              (fullUrl.toLowerCase().endsWith(".wav")
+                ? "audio/wav"
+                : "audio/mpeg");
+            return rawBlob.type === inferredType
+              ? rawBlob
+              : new Blob([rawBlob], { type: inferredType });
+          })
           .then((blob) => {
             if (!blob) return null;
             const url = URL.createObjectURL(blob);
@@ -447,7 +484,7 @@ export function useAiSpeech({
     setTestingVoice(true);
 
     try {
-      const blob = await fetchTestVoice("en-IN-NeerjaNeural");
+      const blob = await fetchTestVoice();
       const url = URL.createObjectURL(blob);
       activeTestUrlRef.current = url;
       const audio = new Audio(url);
