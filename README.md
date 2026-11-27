@@ -29,6 +29,7 @@ The FastAPI backend acts as the single source of truth for room state, countdown
 - [Project Structure](#project-structure)
 - [Getting Started](#getting-started)
 - [Configuration](#configuration)
+- [Cold Starts on Render's Free Tier](#cold-starts-on-renders-free-tier)
 - [API Overview](#api-overview)
 - [Running Tests](#running-tests)
 - [Troubleshooting](#troubleshooting)
@@ -422,6 +423,33 @@ GDArena defaults to **Groq Orpheus** (`canopylabs/orpheus-v1-english`, WAV) with
 |---|---|---|---|
 | `NEXT_PUBLIC_API_URL` | Backend REST base URL | `http://localhost:8000` | No |
 | `NEXT_PUBLIC_WS_URL` | Backend WebSocket base URL (derived from `NEXT_PUBLIC_API_URL` if unset) | `ws://localhost:8000` | No |
+| `NEXT_PUBLIC_SIMULATE_COLD_START` | Dev-only (`NODE_ENV=development`) flag: set to `1` to simulate a ~20s Render cold start locally | Unset | No |
+
+---
+
+## Cold Starts on Render's Free Tier
+
+### Why It Happens
+
+When deployed on Render's free tier, the FastAPI backend spins down automatically after a period of inactivity. The first request after idle triggers a cold boot that typically takes 30 to 60 seconds before the server can answer REST or WebSocket traffic.
+
+### What Users See
+
+- **Silent background warm-up**: On first page load (and when returning to a tab after more than 10 minutes), the frontend silently pings `GET /health`. If the backend is already awake, nothing is shown.
+- **Non-blocking warm-up banner**: On the Setup and Join pages, if the initial warm-up ping is still waiting on a sleeping server, a slim `"Starting the server in the background..."` notice appears at the top without disabling the form.
+- **Waking-up modal overlay**: If the user submits an action (such as creating or joining a room, or opening a room WebSocket while the backend is still waking) and the request takes more than 3 seconds or hits a network/`502`/`503`/`504` error, an accessible modal appears showing a 50-second progress bar, countdown, elapsed timer, and honest status updates (`"Contacting server..."` -> `"Server responded, getting ready..."` -> `"Ready"`). Pending requests are never duplicated; failed wake requests retry once automatically after `/health` returns `200 OK` (with a per-action in-flight guard on room creation).
+- **Slow & timeout handling**: After 50 seconds, the modal switches to an indeterminate indicator (`"Taking a little longer than usual, still starting..."`). If the server is still unreachable after 120 seconds, it displays a retry button and a link to the repository. Real server errors (`4xx` and `500`) pass through immediately as normal errors.
+
+### Testing Locally with the Simulation Flag
+
+To test the waking-up banner and modal locally without waiting for a real Render spin-down, set `NEXT_PUBLIC_SIMULATE_COLD_START=1` while running the Next.js dev server:
+
+```bash
+cd frontend
+NEXT_PUBLIC_SIMULATE_COLD_START=1 npm run dev
+```
+
+This delays the initial `/health` check and the first API request across a ~20-second window (returning simulated failures and `503` responses first, then forwarding to your local backend). The flag is gated behind `NODE_ENV === "development"` and is completely inactive in production builds.
 
 ---
 
@@ -481,10 +509,11 @@ python scripts/run_fake_gd.py --real
 python scripts/run_fake_gd.py --base-url http://localhost:8000
 ```
 
-### Frontend Typecheck, Lint, and Build
+### Frontend Tests, Typecheck, Lint, and Build
 
 ```bash
 cd frontend
+npm test
 npm run typecheck
 npm run lint
 npm run build

@@ -1,6 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  getBackendStatusSnapshot,
+  notifyWsWakeFailure,
+  subscribeBackendStatus,
+} from "@/lib/apiFetch";
 import { buildRoomWsUrl } from "@/lib/config";
 import { formatDelta, formatSkipReason } from "@/lib/format";
 import type {
@@ -471,6 +476,8 @@ export function useRoomSocket(
     fatalRef.current = false;
     retryCountRef.current = 0;
     hasConnectedOnceRef.current = false;
+    let waitingForWakeRetry = false;
+    let lastAwakeSignal = getBackendStatusSnapshot().awakeSignal;
 
     const clearTimer = () => {
       if (reconnectTimerRef.current !== null) {
@@ -503,6 +510,7 @@ export function useRoomSocket(
       ws.onopen = () => {
         retryCountRef.current = 0;
         hasConnectedOnceRef.current = true;
+        waitingForWakeRetry = false;
       };
 
       ws.onmessage = (msgEvent) => {
@@ -539,6 +547,36 @@ export function useRoomSocket(
           return;
         }
 
+        // Initial connection failed while the backend is waking or not yet confirmed awake:
+        // show the waking overlay and retry automatically once /health succeeds.
+        if (!hasConnectedOnceRef.current) {
+          const backend = getBackendStatusSnapshot();
+          if (backend.status !== "awake") {
+            waitingForWakeRetry = true;
+            void notifyWsWakeFailure()
+              .then(() => {
+                if (
+                  !manualCloseRef.current &&
+                  !fatalRef.current &&
+                  waitingForWakeRetry
+                ) {
+                  waitingForWakeRetry = false;
+                  retryCountRef.current = 0;
+                  connect();
+                }
+              })
+              .catch(() => {
+                if (!manualCloseRef.current && !fatalRef.current) {
+                  setState((prev) => ({
+                    ...prev,
+                    status: "reconnecting",
+                  }));
+                }
+              });
+            return;
+          }
+        }
+
         setState((prev) => ({
           ...prev,
           status: "reconnecting",
@@ -557,11 +595,31 @@ export function useRoomSocket(
       };
     };
 
+    const unsubscribeBackend = subscribeBackendStatus(() => {
+      const next = getBackendStatusSnapshot();
+      if (next.awakeSignal > lastAwakeSignal) {
+        lastAwakeSignal = next.awakeSignal;
+        if (
+          waitingForWakeRetry &&
+          !manualCloseRef.current &&
+          !fatalRef.current &&
+          !hasConnectedOnceRef.current &&
+          !wsRef.current
+        ) {
+          waitingForWakeRetry = false;
+          retryCountRef.current = 0;
+          connect();
+        }
+      }
+    });
+
     connectFnRef.current = connect;
     connect();
 
     return () => {
       manualCloseRef.current = true;
+      waitingForWakeRetry = false;
+      unsubscribeBackend();
       clearTimer();
       connectFnRef.current = null;
       if (wsRef.current) {

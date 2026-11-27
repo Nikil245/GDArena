@@ -1,3 +1,9 @@
+import {
+  apiFetch,
+  BackendUnavailableError,
+  RequestInFlightError,
+  type ApiFetchOptions,
+} from "./apiFetch";
 import { getApiBaseUrl } from "./config";
 import type {
   CreateRoomRequest,
@@ -23,19 +29,32 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const url = `${getApiBaseUrl()}${path}`;
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  options?: ApiFetchOptions
+): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(url, {
-      ...init,
-      headers: {
-        "Content-Type": "application/json",
-        ...(init?.headers ?? {}),
+    response = await apiFetch(
+      path,
+      {
+        ...init,
+        headers: {
+          "Content-Type": "application/json",
+          ...(init?.headers ?? {}),
+        },
+        cache: "no-store",
       },
-      cache: "no-store",
-    });
-  } catch {
+      options
+    );
+  } catch (err) {
+    if (err instanceof BackendUnavailableError) {
+      throw new ApiError(503, "server_unavailable", err.message);
+    }
+    if (err instanceof RequestInFlightError) {
+      throw new ApiError(409, "request_in_flight", err.message);
+    }
     throw new ApiError(
       0,
       "network_error",
@@ -95,23 +114,40 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function fetchHealth(): Promise<HealthResponse> {
-  return request<HealthResponse>("/health");
+  return request<HealthResponse>("/health", undefined, {
+    showOverlay: false,
+    retryOnWake: false,
+  });
 }
 
 export function fetchTopics(): Promise<TopicsResponse> {
-  return request<TopicsResponse>("/topics");
+  return request<TopicsResponse>("/topics", undefined, {
+    showOverlay: true,
+    retryOnWake: true,
+  });
 }
 
 export function createRoom(payload: CreateRoomRequest): Promise<Room> {
-  return request<Room>("/rooms", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  return request<Room>(
+    "/rooms",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    {
+      showOverlay: true,
+      retryOnWake: true,
+      actionKey: "create_room",
+    }
+  );
 }
 
 export function fetchRoom(code: string): Promise<RoomSnapshot> {
   const clean = encodeURIComponent(code.trim().toUpperCase());
-  return request<RoomSnapshot>(`/rooms/${clean}`);
+  return request<RoomSnapshot>(`/rooms/${clean}`, undefined, {
+    showOverlay: false,
+    retryOnWake: true,
+  });
 }
 
 export function joinRoom(
@@ -119,21 +155,37 @@ export function joinRoom(
   payload: JoinRoomRequest
 ): Promise<JoinRoomResponse> {
   const clean = encodeURIComponent(code.trim().toUpperCase());
-  return request<JoinRoomResponse>(`/rooms/${clean}/join`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  return request<JoinRoomResponse>(
+    `/rooms/${clean}/join`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    {
+      showOverlay: true,
+      retryOnWake: true,
+      actionKey: "join_room",
+    }
+  );
 }
 
 export async function fetchReport(
   code: string
-): Promise<{ status: "ready"; report: FinalReport } | { status: "generating" }> {
+): Promise<
+  { status: "ready"; report: FinalReport } | { status: "generating" }
+> {
   const clean = encodeURIComponent(code.trim().toUpperCase());
-  const url = `${getApiBaseUrl()}/rooms/${clean}/report`;
   let response: Response;
   try {
-    response = await fetch(url, { cache: "no-store" });
-  } catch {
+    response = await apiFetch(
+      `/rooms/${clean}/report`,
+      { cache: "no-store" },
+      { showOverlay: false, retryOnWake: false }
+    );
+  } catch (err) {
+    if (err instanceof BackendUnavailableError) {
+      throw new ApiError(503, "server_unavailable", err.message);
+    }
     throw new ApiError(0, "network_error", "Unable to reach the server.");
   }
 
@@ -178,13 +230,27 @@ export async function fetchTestVoice(
     typeof options === "string" ? { voice: options } : options ?? {};
   let response: Response;
   try {
-    response = await fetch(`${getApiBaseUrl()}/tts/test`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      cache: "no-store",
-    });
-  } catch {
+    response = await apiFetch(
+      "/tts/test",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        cache: "no-store",
+      },
+      {
+        showOverlay: true,
+        retryOnWake: true,
+        actionKey: "test_voice",
+      }
+    );
+  } catch (err) {
+    if (err instanceof BackendUnavailableError) {
+      throw new ApiError(503, "server_unavailable", err.message);
+    }
+    if (err instanceof RequestInFlightError) {
+      throw new ApiError(409, "request_in_flight", err.message);
+    }
     throw new ApiError(
       0,
       "network_error",
@@ -234,12 +300,27 @@ export async function transcribeAudio(
 
   let response: Response;
   try {
-    response = await fetch(`${getApiBaseUrl()}/stt`, {
-      method: "POST",
-      body: form,
-      cache: "no-store",
-    });
-  } catch {
+    response = await apiFetch(
+      "/stt",
+      {
+        method: "POST",
+        body: form,
+        cache: "no-store",
+      },
+      {
+        showOverlay: true,
+        retryOnWake: true,
+        actionKey: "transcribe_audio",
+        slowRequestMs: 8_000,
+      }
+    );
+  } catch (err) {
+    if (err instanceof BackendUnavailableError) {
+      throw new ApiError(503, "server_unavailable", err.message);
+    }
+    if (err instanceof RequestInFlightError) {
+      throw new ApiError(409, "request_in_flight", err.message);
+    }
     throw new ApiError(
       0,
       "network_error",
@@ -271,4 +352,3 @@ export async function transcribeAudio(
   }
   return body as SttResponse;
 }
-

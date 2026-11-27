@@ -8,11 +8,16 @@ import {
   BarChart3,
   Clock,
   FileText,
+  Loader2,
   Mic,
   SlidersHorizontal,
   Users,
 } from "lucide-react";
 import { AppHeader } from "@/components/AppHeader";
+import {
+  useBackendStatus,
+  WarmupBanner,
+} from "@/components/BackendStatusProvider";
 import { StyledSelect, type SelectOption } from "@/components/StyledSelect";
 import { ApiError, createRoom } from "@/lib/api";
 import type { TopicCategory } from "@/lib/types";
@@ -52,6 +57,7 @@ const WHAT_YOU_GET_ITEMS = [
 
 export default function HomePage() {
   const router = useRouter();
+  const { overlayVisible } = useBackendStatus();
 
   const [topicMode, setTopicMode] = useState<"custom" | "moderator">(
     "moderator"
@@ -110,6 +116,9 @@ export default function HomePage() {
       });
       router.push(`/join?code=${encodeURIComponent(room.code)}&created=1`);
     } catch (err) {
+      if (err instanceof ApiError && err.code === "request_in_flight") {
+        return;
+      }
       if (err instanceof ApiError) {
         setError(err.message);
       } else {
@@ -131,6 +140,7 @@ export default function HomePage() {
       <AppHeader />
 
       <main className="app-container py-6 sm:py-10">
+        <WarmupBanner />
         <div className="mb-6 sm:mb-8">
           <h1 className="text-page-title font-semibold text-ink sm:text-[28px]">
             Group Discussion Practice
@@ -403,11 +413,20 @@ export default function HomePage() {
               <div className="border-t border-line-subtle pt-5">
                 <button
                   type="submit"
-                  disabled={submitting}
+                  disabled={submitting || overlayVisible}
                   className="ui-btn-primary h-11 w-full px-6 sm:w-auto"
                 >
+                  {submitting && (
+                    <Loader2
+                      className="h-4 w-4 animate-spin motion-reduce:animate-none"
+                      strokeWidth={2}
+                      aria-hidden="true"
+                    />
+                  )}
                   {submitting ? "Creating Room..." : "Create Room"}
-                  <ArrowRight className="h-4 w-4" strokeWidth={2} />
+                  {!submitting && (
+                    <ArrowRight className="h-4 w-4" strokeWidth={2} />
+                  )}
                 </button>
               </div>
             </form>

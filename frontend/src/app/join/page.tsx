@@ -9,10 +9,15 @@ import {
   Check,
   CheckCircle2,
   Copy,
+  Loader2,
   Shield,
   User,
 } from "lucide-react";
 import { AppHeader } from "@/components/AppHeader";
+import {
+  useBackendStatus,
+  WarmupBanner,
+} from "@/components/BackendStatusProvider";
 import { MicCheck } from "@/components/join/MicCheck";
 import { TablePreview } from "@/components/join/TablePreview";
 import { TipsCard } from "@/components/join/TipsCard";
@@ -24,6 +29,7 @@ import type { Role, Room } from "@/lib/types";
 function JoinRoomContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { overlayVisible } = useBackendStatus();
 
   const initialCode = (searchParams.get("code") ?? "").trim().toUpperCase();
   const isNewlyCreated = searchParams.get("created") === "1";
@@ -153,6 +159,9 @@ function JoinRoomContent() {
 
       router.push(`/room/${encodeURIComponent(res.room.code)}`);
     } catch (err) {
+      if (err instanceof ApiError && err.code === "request_in_flight") {
+        return;
+      }
       if (err instanceof ApiError) {
         setSubmitError(err.message);
       } else {
@@ -164,6 +173,7 @@ function JoinRoomContent() {
 
   return (
     <main className="app-container py-6 sm:py-10">
+      <WarmupBanner />
       {isNewlyCreated && initialCode && (
         <div
           role="status"
@@ -363,11 +373,25 @@ function JoinRoomContent() {
 
               <button
                 type="submit"
-                disabled={submitting || isFinished || Boolean(previewError)}
+                disabled={
+                  submitting ||
+                  isFinished ||
+                  Boolean(previewError) ||
+                  overlayVisible
+                }
                 className="ui-btn-primary h-11 w-full px-6 sm:w-auto"
               >
+                {submitting && (
+                  <Loader2
+                    className="h-4 w-4 animate-spin motion-reduce:animate-none"
+                    strokeWidth={2}
+                    aria-hidden="true"
+                  />
+                )}
                 {submitting ? "Joining..." : "Join Room"}
-                <ArrowRight className="h-4 w-4" strokeWidth={2} />
+                {!submitting && (
+                  <ArrowRight className="h-4 w-4" strokeWidth={2} />
+                )}
               </button>
             </div>
           </form>
