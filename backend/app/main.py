@@ -17,6 +17,7 @@ from .core.errors import GDError
 from .core.registry import registry
 from .db import init_db
 from .services.llm import get_llm, verify_provider_models
+from .services.service_status import get_service_status
 from .services.stt import get_stt
 from .services.tts import get_tts, verify_tts_voices
 
@@ -32,6 +33,7 @@ log = logging.getLogger("gd_arena")
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_db()
     registry.recover_stale_rooms()
+    get_service_status().configure_simulation(settings)
     llm = get_llm()
     stt = get_stt()
     tts = get_tts()

@@ -8,6 +8,11 @@ import {
 } from "@/lib/apiFetch";
 import { buildRoomWsUrl } from "@/lib/config";
 import { formatDelta, formatSkipReason } from "@/lib/format";
+import {
+  INITIAL_ROOM_SERVICE_BANNER,
+  reduceRoomServiceBanner,
+  type RoomServiceBannerState,
+} from "@/lib/serviceStatus";
 import type {
   ActivityNotice,
   Participant,
@@ -30,6 +35,7 @@ export interface RoomSocketState {
   snapshot: RoomSnapshot | null;
   scoreAdjustments: WsScoreAdjustedData[];
   activity: ActivityNotice[];
+  serviceStatus: RoomServiceBannerState;
   lastError: WsErrorData | null;
   fatalError: WsErrorData | null;
 }
@@ -39,6 +45,8 @@ export interface RoomSocketActions {
   requestState: () => void;
   startGd: () => void;
   endGd: () => void;
+  continueWithoutAi: () => void;
+  dismissBackNotice: () => void;
   raiseHand: () => void;
   lowerHand: (participantId?: number) => void;
   submitTurn: (text: string, source?: "text" | "voice") => void;
@@ -93,6 +101,7 @@ export function useRoomSocket(
     snapshot: null,
     scoreAdjustments: [],
     activity: [],
+    serviceStatus: INITIAL_ROOM_SERVICE_BANNER,
     lastError: null,
     fatalError: null,
   });
@@ -125,6 +134,10 @@ export function useRoomSocket(
             ...snap,
             participants: synced,
           },
+          serviceStatus: reduceRoomServiceBanner(prev.serviceStatus, {
+            type: "sync_snapshot",
+            payload: snap.service_status,
+          }),
           lastError: null,
           fatalError: null,
         }));
@@ -140,6 +153,10 @@ export function useRoomSocket(
           ...prev,
           you: findYou(synced, prev.you),
           snapshot: { ...snap, participants: synced },
+          serviceStatus: reduceRoomServiceBanner(prev.serviceStatus, {
+            type: "sync_snapshot",
+            payload: snap.service_status,
+          }),
         }));
         break;
       }
@@ -342,6 +359,10 @@ export function useRoomSocket(
                   scores: event.data.scores,
                   comment: event.data.comment,
                   turn_score: event.data.turn_score,
+                  score_status:
+                    event.data.score_status ??
+                    (event.data.turn_score !== null ? "scored" : "not_scored"),
+                  score_reason: event.data.score_reason ?? null,
                 }
               : entry
           );
@@ -450,6 +471,17 @@ export function useRoomSocket(
             },
           };
         });
+        break;
+      }
+
+      case "service_status": {
+        setState((prev) => ({
+          ...prev,
+          serviceStatus: reduceRoomServiceBanner(prev.serviceStatus, {
+            type: "service_status",
+            payload: event.data,
+          }),
+        }));
         break;
       }
 
@@ -659,6 +691,23 @@ export function useRoomSocket(
     ),
     startGd: useCallback(() => sendCommand({ type: "start_gd" }), [sendCommand]),
     endGd: useCallback(() => sendCommand({ type: "end_gd" }), [sendCommand]),
+    continueWithoutAi: useCallback(() => {
+      setState((prev) => ({
+        ...prev,
+        serviceStatus: reduceRoomServiceBanner(prev.serviceStatus, {
+          type: "continue_without_ai",
+        }),
+      }));
+      sendCommand({ type: "continue_without_ai" });
+    }, [sendCommand]),
+    dismissBackNotice: useCallback(() => {
+      setState((prev) => ({
+        ...prev,
+        serviceStatus: reduceRoomServiceBanner(prev.serviceStatus, {
+          type: "dismiss_back_notice",
+        }),
+      }));
+    }, []),
     raiseHand: useCallback(
       () => sendCommand({ type: "raise_hand" }),
       [sendCommand]

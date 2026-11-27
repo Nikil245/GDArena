@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "jiti src/lib/__tests__/apiFetch.test.ts"
+    "test": "jiti src/lib/__tests__/apiFetch.test.ts && jiti src/lib/__tests__/serviceStatus.test.ts"
   },
   "dependencies": {
     "@fontsource/inter": "^5.1.1",

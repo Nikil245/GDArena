@@ -13,6 +13,7 @@ import type {
   JoinRoomResponse,
   Room,
   RoomSnapshot,
+  ServiceStatusResponse,
   SttResponse,
   TopicsResponse,
 } from "./types";
@@ -20,12 +21,19 @@ import type {
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
+  readonly retryAfterSeconds: number | null;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    retryAfterSeconds: number | null = null
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -117,6 +125,14 @@ export function fetchHealth(): Promise<HealthResponse> {
   return request<HealthResponse>("/health", undefined, {
     showOverlay: false,
     retryOnWake: false,
+  });
+}
+
+export function fetchServiceStatus(): Promise<ServiceStatusResponse> {
+  return request<ServiceStatusResponse>("/status", undefined, {
+    showOverlay: false,
+    retryOnWake: false,
+    suppressWaking: true,
   });
 }
 
@@ -330,6 +346,29 @@ export async function transcribeAudio(
 
   const body = await response.json().catch(() => null);
   if (!response.ok) {
+    if (
+      body &&
+      typeof body === "object" &&
+      "code" in body &&
+      typeof (body as { code?: unknown }).code === "string"
+    ) {
+      const flat = body as {
+        code: string;
+        message?: string;
+        retry_after_seconds?: number | null;
+      };
+      const retryAfter =
+        typeof flat.retry_after_seconds === "number" &&
+        Number.isFinite(flat.retry_after_seconds)
+          ? flat.retry_after_seconds
+          : null;
+      throw new ApiError(
+        response.status,
+        flat.code,
+        flat.message ?? "Could not transcribe audio.",
+        retryAfter
+      );
+    }
     if (
       body &&
       typeof body === "object" &&

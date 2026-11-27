@@ -19,6 +19,7 @@ export interface OccupiedTagDescriptor {
   isYou: boolean;
   isSpeaking: boolean;
   isThinking: boolean;
+  aiPaused?: boolean;
   queuePosition: number | null;
 }
 
@@ -137,9 +138,15 @@ export function ParticipantTagOverlay({
                     Moderator
                   </span>
                 ) : tag.participant.is_ai ? (
-                  <span className="rounded border border-slate-200 bg-slate-100 px-1 py-0 text-[9px] font-medium text-slate-600">
-                    AI
-                  </span>
+                  tag.aiPaused ? (
+                    <span className="rounded border border-amber-300 bg-amber-50 px-1 py-0 text-[9px] font-medium text-amber-900">
+                      Paused
+                    </span>
+                  ) : (
+                    <span className="rounded border border-slate-200 bg-slate-100 px-1 py-0 text-[9px] font-medium text-slate-600">
+                      AI
+                    </span>
+                  )
                 ) : null}
               </div>
             </div>

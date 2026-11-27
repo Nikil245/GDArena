@@ -19,6 +19,7 @@ import {
   RoomMobileStatusStrip,
 } from "@/components/RoomHeaderControls";
 import { RoundTable } from "@/components/RoundTable";
+import { RoomServiceStatusBanner } from "@/components/ServiceStatusBanner";
 import { TimerBanner } from "@/components/TimerBanner";
 import { TranscriptPanel } from "@/components/TranscriptPanel";
 import { TurnControls } from "@/components/TurnControls";
@@ -62,6 +63,7 @@ export default function RoomPage({ params }: RoomPageProps) {
   const you = state.you;
   const isDisconnected = state.status !== "connected";
   const canModerate = Boolean(you?.can_moderate);
+  const llmExhausted = state.serviceStatus.llmState === "exhausted";
 
   const aiSpeech = useAiSpeech({
     transcript: snapshot?.transcript,
@@ -69,6 +71,7 @@ export default function RoomPage({ params }: RoomPageProps) {
     roomStatus: snapshot?.room.status,
     welcomeCount: state.welcomeCount,
     isHumanRecording,
+    aiPaused: llmExhausted,
     onPlaybackEnded: actions.reportPlaybackEnded,
   });
 
@@ -198,6 +201,18 @@ export default function RoomPage({ params }: RoomPageProps) {
           </div>
         )}
 
+        {/* AI usage limit / recovery banner */}
+        {snapshot.room.status !== "finished" && (
+          <RoomServiceStatusBanner
+            serviceStatus={state.serviceStatus}
+            canModerate={canModerate}
+            disabled={isDisconnected}
+            onContinueWithoutAi={actions.continueWithoutAi}
+            onEndSession={actions.endGd}
+            onDismissBackNotice={actions.dismissBackNotice}
+          />
+        )}
+
         {/* Spectator callout when user opened /room/[code] directly */}
         {!you && snapshot.room.status !== "finished" && (
           <div className="ui-card flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-sm text-ink-secondary">
@@ -313,6 +328,7 @@ export default function RoomPage({ params }: RoomPageProps) {
                   room={snapshot.room}
                   participants={snapshot.participants}
                   currentSpeaker={snapshot.current_speaker}
+                  aiPaused={llmExhausted}
                   queue={snapshot.queue}
                   youId={you?.id ?? null}
                 />
@@ -327,6 +343,7 @@ export default function RoomPage({ params }: RoomPageProps) {
                     currentSpeaker={snapshot.current_speaker}
                     ttsSpeakingParticipantId={aiSpeech.aiSpeakingParticipantId}
                     isHumanRecording={isHumanRecording}
+                    aiPaused={llmExhausted}
                     queue={snapshot.queue}
                     youId={you?.id ?? null}
                   />

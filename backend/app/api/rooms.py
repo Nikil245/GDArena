@@ -18,7 +18,8 @@ from ..schemas import CreateRoomRequest, JoinRoomRequest, TopicCategory
 from ..services import topics
 from ..services.llm import get_llm
 from ..services.personas import ALL_PERSONAS, find_persona
-from ..services.stt import STTError, VoiceNotSupportedError, get_stt
+from ..services.service_status import get_service_status
+from ..services.stt import STTError, STTRateLimitError, VoiceNotSupportedError, get_stt
 from ..services.tts import (
     TTSError,
     get_tts,
@@ -62,6 +63,12 @@ async def health() -> dict[str, Any]:
         "tts_model": getattr(tts, "model", None),
         "tts_accent_preference": settings.tts_accent_preference,
     }
+
+
+@router.get("/status", tags=["meta"])
+async def service_status() -> dict[str, Any]:
+    """Cheap, secret-free in-memory status for LLM and STT services."""
+    return get_service_status().public_status()
 
 
 @router.get("/audio/{room_code}/{turn_id}.{ext}", tags=["voice"])
@@ -131,6 +138,15 @@ async def transcribe_speech(
     stt = get_stt()
     try:
         result = await stt.transcribe(data, mime_type=file.content_type, language=language)
+    except STTRateLimitError as exc:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "code": "stt_rate_limited",
+                "retry_after_seconds": exc.retry_after_seconds,
+                "message": str(exc),
+            },
+        )
     except VoiceNotSupportedError as exc:
         raise GDError("voice_not_supported", str(exc), 400) from exc
     except STTError as exc:

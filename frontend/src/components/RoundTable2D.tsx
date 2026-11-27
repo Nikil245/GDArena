@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, Hand, Mic, User } from "lucide-react";
+import { Bot, Hand, Mic, PauseCircle, User } from "lucide-react";
 import { getInitials } from "@/lib/format";
 import type { Participant, QueueItem, Room, Speaker } from "@/lib/types";
 
@@ -9,6 +9,7 @@ interface RoundTable2DProps {
   participants: Participant[];
   currentSpeaker: Speaker | null;
   ttsSpeakingParticipantId?: number | null;
+  aiPaused?: boolean;
   queue: QueueItem[];
   youId: number | null;
 }
@@ -23,6 +24,7 @@ export function RoundTable2D({
   participants,
   currentSpeaker,
   ttsSpeakingParticipantId = null,
+  aiPaused = false,
   queue,
   youId,
 }: RoundTable2DProps) {
@@ -63,10 +65,14 @@ export function RoundTable2D({
       );
     }
 
+    const isPausedAi = p.is_ai && aiPaused;
     const isThinking =
+      !isPausedAi &&
       currentSpeaker?.participant_id === p.id &&
       currentSpeaker?.phase === "thinking";
-    const isSpeaking = p.is_ai
+    const isSpeaking = isPausedAi
+      ? false
+      : p.is_ai
       ? ttsSpeakingParticipantId === p.id
       : currentSpeaker?.participant_id === p.id;
     const isActiveTurn = isSpeaking || isThinking;
@@ -153,10 +159,17 @@ export function RoundTable2D({
 
             <div className="mt-0.5 flex items-center gap-1">
               {p.is_ai ? (
-                <span className="inline-flex items-center gap-0.5 rounded-chip border border-line bg-muted px-1 py-0.5 text-[10px] font-medium text-ink-secondary">
-                  <Bot className="h-2.5 w-2.5" strokeWidth={1.75} />
-                  AI
-                </span>
+                isPausedAi ? (
+                  <span className="inline-flex items-center gap-0.5 rounded-chip border border-amber-300 bg-amber-50 px-1 py-0.5 text-[10px] font-medium text-amber-900">
+                    <PauseCircle className="h-2.5 w-2.5" strokeWidth={1.75} />
+                    Paused
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-0.5 rounded-chip border border-line bg-muted px-1 py-0.5 text-[10px] font-medium text-ink-secondary">
+                    <Bot className="h-2.5 w-2.5" strokeWidth={1.75} />
+                    AI
+                  </span>
+                )
               ) : (
                 <span className="inline-flex items-center gap-0.5 text-[10px] text-ink-muted">
                   <User className="h-2.5 w-2.5" strokeWidth={1.75} />

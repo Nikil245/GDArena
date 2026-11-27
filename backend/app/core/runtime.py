@@ -31,7 +31,21 @@ from ..models import Participant, Role, Room, RoomStatus, ScoreAdjustment, Turn,
 from ..services import ai_agent, scoring
 from ..services.llm import LLMClient, get_llm
 from ..services.personas import Persona, assign_personas, get_persona
-from ..services.stt import SpeechInput, SpeechToText, STTError, VoiceNotSupportedError, get_stt, resolve_speech
+from ..services.service_status import (
+    ServiceStatusEvent,
+    ServiceStatusTracker,
+    get_service_status,
+    redact_secrets,
+)
+from ..services.stt import (
+    SpeechInput,
+    SpeechToText,
+    STTError,
+    STTRateLimitError,
+    VoiceNotSupportedError,
+    get_stt,
+    resolve_speech,
+)
 from ..services.tts import TextToSpeech, cleanup_room_audio, get_tts, save_turn_audio
 from ..timeutil import iso, utcnow
 from .errors import GDError
@@ -75,6 +89,8 @@ class Entry:
     scores: dict[str, int] | None = None
     comment: str | None = None
     turn_score: float | None = None
+    score_status: str = "pending"  # "pending" | "scored" | "not_scored"
+    score_reason: str | None = None
 
     def public(self) -> dict[str, Any]:
         return {
@@ -92,6 +108,8 @@ class Entry:
             "scores": self.scores,
             "comment": self.comment,
             "turn_score": self.turn_score,
+            "score_status": self.score_status,
+            "score_reason": self.score_reason,
         }
 
     def score_public(self) -> dict[str, Any]:
@@ -103,6 +121,8 @@ class Entry:
             "scores": self.scores,
             "comment": self.comment,
             "turn_score": self.turn_score,
+            "score_status": self.score_status,
+            "score_reason": self.score_reason,
         }
 
 
@@ -161,12 +181,14 @@ class RoomRuntime:
         llm: LLMClient | None = None,
         stt: SpeechToText | None = None,
         tts: TextToSpeech | None = None,
+        service_status: ServiceStatusTracker | None = None,
     ) -> None:
         assert room.id is not None
         self.settings = settings or get_settings()
         self.llm = llm or get_llm()
         self.stt = stt or get_stt()
         self.tts = tts or get_tts()
+        self.service_status = service_status or get_service_status()
 
         self.room_id: int = room.id
         self.code = room.code
@@ -208,6 +230,9 @@ class RoomRuntime:
                 continue
             m = self.members[t.participant_id]
             has_scores = t.turn_score is not None
+            is_unscored = (not has_scores) and (
+                t.comment == "scoring unavailable" or self.status == RoomStatus.FINISHED
+            )
             self.entries.append(
                 Entry(
                     turn_id=t.id or 0,
@@ -224,8 +249,10 @@ class RoomRuntime:
                         if has_scores
                         else None
                     ),
-                    comment=t.comment,
+                    comment=None if is_unscored else t.comment,
                     turn_score=t.turn_score,
+                    score_status="scored" if has_scores else ("not_scored" if is_unscored else "pending"),
+                    score_reason="scoring unavailable" if is_unscored else None,
                 )
             )
         self.adjustments: list[Adjustment] = [
@@ -249,6 +276,8 @@ class RoomRuntime:
         self._tasks: set[asyncio.Task[Any]] = set()
         self._scoring_tasks: set[asyncio.Task[Any]] = set()
         self._rng = random.Random()
+        self.ai_continue_without: bool = False
+        self._unsubscribe_status = self.service_status.subscribe(self._on_service_status_event)
 
     # ==================================================================================
     # Read models
@@ -367,6 +396,9 @@ class RoomRuntime:
             "leaderboard": self.leaderboard(),
             "report_status": self.report_status,
             "report": self.report,
+            "service_status": self.service_status.llm_event_payload(
+                continue_without_ai=self.ai_continue_without
+            ),
         }
 
     # ==================================================================================
@@ -437,6 +469,8 @@ class RoomRuntime:
             await self.adjust_score(member, _req_int(msg, "participant_id"), msg.get("delta"), msg.get("reason"))
         elif mtype == "playback_ended":
             await self.report_playback_ended(_opt_int(msg.get("turn_id")))
+        elif mtype == "continue_without_ai":
+            await self.continue_without_ai(member)
         else:
             raise GDError("unknown_type", f"Unknown message type {mtype!r}.")
 
@@ -484,6 +518,7 @@ class RoomRuntime:
             self._started_mono = now_mono
             self._ends_mono = now_mono + self.duration_seconds
             self._floor_free_since = now_mono
+            self.service_status.notify_room_started()
             self._persist_room(status=self.status, started_at=self.started_at)
 
             self._broadcast_participants()
@@ -500,6 +535,13 @@ class RoomRuntime:
                     "leaderboard": self.leaderboard(),
                 },
             )
+            if self.service_status.is_llm_exhausted():
+                self.hub.broadcast(
+                    "service_status",
+                    self.service_status.llm_event_payload(
+                        continue_without_ai=self.ai_continue_without
+                    ),
+                )
             self._tick_task = self._spawn(self._tick_loop())
             log.info("Room %s started: %d players, topic=%r", self.code, len(self.players()), self.topic)
 
@@ -521,6 +563,7 @@ class RoomRuntime:
                 self.active = None
             self._cancel_gap_task()
             self._cancel_prefetch("room_ended")
+            self._unsubscribe_status()
             self.queue.clear()
             self._persist_room(status=self.status, ended_at=self.ended_at, end_reason=reason)
 
@@ -589,6 +632,8 @@ class RoomRuntime:
             raise GDError("not_your_turn", "You don't have the floor. Raise your hand first.", 409)
         try:
             transcription = await resolve_speech(inp, self.stt)
+        except STTRateLimitError as exc:
+            raise GDError("stt_rate_limited", str(exc), 429) from exc
         except VoiceNotSupportedError as exc:
             raise GDError("voice_not_supported", str(exc), 400) from exc
         except STTError as exc:
@@ -625,6 +670,12 @@ class RoomRuntime:
             target = self.members.get(participant_id)
             if target is None or not target.is_player:
                 raise GDError("not_found", "No such player in this room.", 404)
+            if target.is_ai and self._is_ai_paused():
+                raise GDError(
+                    "ai_paused",
+                    "AI participants are paused while the usage limit is active.",
+                    409,
+                )
             if self.active is not None:
                 raise GDError("floor_busy", "Someone is speaking. Use skip_speaker first.", 409)
             self._cancel_gap_task()
@@ -686,6 +737,86 @@ class RoomRuntime:
             )
             self._broadcast_leaderboard()
 
+    async def continue_without_ai(self, by: Member) -> None:
+        """Moderator acknowledges LLM exhaustion and keeps the session running with humans only."""
+        async with self.lock:
+            self._require_moderator(by)
+            self._require_running()
+            self.ai_continue_without = True
+            self._pause_ai_locked()
+            self.hub.broadcast(
+                "service_status",
+                self.service_status.llm_event_payload(continue_without_ai=True),
+            )
+
+    def _is_ai_paused(self) -> bool:
+        return self.ai_continue_without or self.service_status.is_llm_exhausted()
+
+    def _pause_ai_locked(self) -> None:
+        """Cancel AI prefetch/gaps, drop queued AI turns, and release floor if an AI holds it."""
+        self._cancel_prefetch("llm_exhausted")
+        self._cancel_gap_task()
+        before = list(self.queue)
+        self.queue = [
+            pid for pid in self.queue if pid in self.members and not self.members[pid].is_ai
+        ]
+        if self.queue != before:
+            self._broadcast_queue()
+        if self.active is not None:
+            active_member = self.members.get(self.active.participant_id)
+            if active_member is not None and active_member.is_ai:
+                if self.active.entry_recorded:
+                    self._cancel_turn_task(self.active)
+                    self._release_floor()
+                else:
+                    self._skip_active("ai_error", quiet=True)
+                self._advance()
+
+    def _on_service_status_event(self, event: ServiceStatusEvent) -> None:
+        if event.service != "llm" or self.status != RoomStatus.RUNNING:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop (e.g., synchronous test hook): broadcast directly.
+            self.hub.broadcast(
+                "service_status",
+                event.public() | {"continue_without_ai": self.ai_continue_without},
+            )
+            return
+        if loop.is_running():
+            self._spawn(self._handle_llm_status_change(event))
+
+    async def _handle_llm_status_change(self, event: ServiceStatusEvent) -> None:
+        async with self.lock:
+            if self.status != RoomStatus.RUNNING:
+                return
+            if event.state == "exhausted":
+                self._pause_ai_locked()
+                self.hub.broadcast(
+                    "service_status",
+                    {
+                        "service": "llm",
+                        "state": "exhausted",
+                        "retry_at": iso(event.retry_at),
+                        "message": event.message,
+                        "continue_without_ai": self.ai_continue_without,
+                    },
+                )
+            elif event.state == "ok":
+                self.ai_continue_without = False
+                self._floor_free_since = time.monotonic()
+                self.hub.broadcast(
+                    "service_status",
+                    {
+                        "service": "llm",
+                        "state": "ok",
+                        "retry_at": None,
+                        "message": event.message,
+                        "continue_without_ai": False,
+                    },
+                )
+
     # ==================================================================================
     # Turn engine (call with the lock held)
     # ==================================================================================
@@ -707,6 +838,10 @@ class RoomRuntime:
             pid = self.queue[0]
             m = self.members.get(pid)
             if m is None:
+                self.queue.pop(0)
+                popped = True
+                continue
+            if m.is_ai and self._is_ai_paused():
                 self.queue.pop(0)
                 popped = True
                 continue
@@ -890,6 +1025,9 @@ class RoomRuntime:
         """Prefetch the next queued AI ONLY while an AI turn is actively playing (never during a human turn)."""
         if self.status != RoomStatus.RUNNING or self.active is None or not self.active.entry_recorded:
             return
+        if self._is_ai_paused():
+            self._cancel_prefetch("ai_paused")
+            return
         if not self.queue:
             return
         next_m = self.members.get(self.queue[0])
@@ -976,7 +1114,12 @@ class RoomRuntime:
             raise
         except Exception as exc:
             pf.failed = True
-            log.error("Prefetch LLM failed for %s in room %s: %s", m.name, self.code, exc, exc_info=True)
+            log.error(
+                "Prefetch LLM failed for %s in room %s: %s",
+                m.name,
+                self.code,
+                redact_secrets(str(exc)),
+            )
 
     def _schedule_next_after_ai(self, audio_end_mono: float) -> None:
         """Release the floor after an AI turn and advance after TURN_GAP_SECONDS (or 0ms if human is next)."""
@@ -1013,6 +1156,8 @@ class RoomRuntime:
                     return
                 if self.queue:
                     self._advance()
+                    return
+                if self._is_ai_paused():
                     return
                 # Queue is empty: immediately let an eligible AI pick up the discussion.
                 picked = self._pick_idle_ai()
@@ -1095,6 +1240,12 @@ class RoomRuntime:
                 log.warning("Prefetch await failed for %s: %s", m.name, exc)
 
         if not used_prefetch:
+            if self._is_ai_paused():
+                async with self.lock:
+                    if self.active is turn:
+                        self._skip_active("ai_error", quiet=True)
+                        self._advance()
+                return
             try:
                 t0 = time.monotonic()
                 gen = await asyncio.wait_for(
@@ -1114,7 +1265,12 @@ class RoomRuntime:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                log.error("AI turn failed for %s in room %s: %s", m.name, self.code, exc, exc_info=True)
+                log.error(
+                    "AI turn failed for %s in room %s: %s",
+                    m.name,
+                    self.code,
+                    redact_secrets(str(exc)),
+                )
                 async with self.lock:
                     if self.active is turn:
                         self._skip_active("ai_error", quiet=True)
@@ -1219,7 +1375,31 @@ class RoomRuntime:
                 )
                 self._schedule_next_after_ai(audio_end)
 
+    async def _mark_entry_unscored(self, entry: Entry, reason: str = "scoring unavailable") -> None:
+        async with self.lock:
+            entry.scores = None
+            entry.comment = None
+            entry.turn_score = None
+            entry.score_status = "not_scored"
+            entry.score_reason = reason
+            with new_session() as s:
+                row = s.get(Turn, entry.turn_id)
+                if row is not None:
+                    row.relevance = None
+                    row.clarity = None
+                    row.content = None
+                    row.teamwork = None
+                    row.comment = reason
+                    row.turn_score = None
+                    s.add(row)
+                    s.commit()
+            self.hub.broadcast("turn_scored", entry.score_public())
+            self._broadcast_leaderboard()
+
     async def _score_entry(self, entry: Entry) -> None:
+        if self.service_status.is_llm_exhausted():
+            await self._mark_entry_unscored(entry, "scoring unavailable")
+            return
         idx = self.entries.index(entry)
         context = [(e.name, e.text) for e in self.entries[max(0, idx - scoring.CONTEXT_TURNS) : idx]]
         started = time.monotonic()
@@ -1228,12 +1408,20 @@ class RoomRuntime:
                 self.llm, topic=self.topic, speaker=entry.name, text=entry.text, context=context
             )
         except Exception as exc:
-            log.warning("Scoring failed for turn %s in room %s: %s", entry.turn_id, self.code, exc)
+            log.warning(
+                "Scoring failed for turn %s in room %s: %s",
+                entry.turn_id,
+                self.code,
+                redact_secrets(str(exc)),
+            )
+            await self._mark_entry_unscored(entry, "scoring unavailable")
             return
         async with self.lock:
             entry.scores = result.scores
             entry.comment = result.comment
             entry.turn_score = result.turn_score
+            entry.score_status = "scored"
+            entry.score_reason = None
             with new_session() as s:
                 row = s.get(Turn, entry.turn_id)
                 if row is not None:
@@ -1268,6 +1456,7 @@ class RoomRuntime:
     def _on_tick(self, now: float) -> None:
         if self.status != RoomStatus.RUNNING:
             return
+        self.service_status.check_recovery()
         a = self.active
         if a is not None and a.deadline_mono is not None and now >= a.deadline_mono:
             if a.entry_recorded:  # AI already spoke; its speaking time just ran out
@@ -1280,7 +1469,7 @@ class RoomRuntime:
 
     def _ai_hand_raising(self, now: float) -> None:
         """AIs raise their hands on their own, probabilistically, and step in when the floor goes quiet."""
-        if self.status != RoomStatus.RUNNING:
+        if self.status != RoomStatus.RUNNING or self._is_ai_paused():
             return
         players = self.players()
         ais = [m for m in players if m.is_ai and m.persona is not None]
@@ -1354,6 +1543,8 @@ class RoomRuntime:
                 mine = [e for e in self.entries if e.participant_id == m.id]
                 if not mine:
                     return scoring.no_contribution_feedback()
+                if self.service_status.is_llm_exhausted():
+                    return scoring.fallback_feedback(stats)
                 try:
                     return await scoring.generate_feedback(
                         self.llm,
@@ -1363,7 +1554,7 @@ class RoomRuntime:
                         stats=stats,
                     )
                 except Exception as exc:
-                    log.warning("Report feedback failed for %s: %s", m.name, exc)
+                    log.warning("Report feedback failed for %s: %s", m.name, redact_secrets(str(exc)))
                     return scoring.fallback_feedback(stats)
 
             players = [self.members[row["participant_id"]] for row in board]
@@ -1380,6 +1571,8 @@ class RoomRuntime:
                         "rank": row["rank"],
                         "total_score": row["total_score"],
                         "turns": row["turns"],
+                        "scored_turns": row["scored_turns"],
+                        "unscored_turns": row["unscored_turns"],
                         "average": row["average"],
                         "average_turn_score": row["average_turn_score"],
                         "adjustments": row["adjustments"],
@@ -1389,6 +1582,12 @@ class RoomRuntime:
                     }
                 )
             best = next((p for p in participants if p["turns"] > 0), None)
+            unscored_turns = sum(1 for e in self.entries if e.turn_score is None)
+            scoring_note = (
+                f"{unscored_turns} of {len(self.entries)} turn(s) were not scored because AI services reached their usage limit."
+                if unscored_turns > 0
+                else None
+            )
             report = {
                 "room_code": self.code,
                 "topic": self.topic,
@@ -1397,6 +1596,8 @@ class RoomRuntime:
                 "ended_at": iso(self.ended_at),
                 "end_reason": self.end_reason,
                 "total_turns": len(self.entries),
+                "unscored_turns": unscored_turns,
+                "scoring_note": scoring_note,
                 "best_performer": (
                     {
                         "participant_id": best["participant_id"],
@@ -1498,6 +1699,7 @@ class RoomRuntime:
         return self.status == RoomStatus.FINISHED and self.hub.client_count == 0 and self.report_status != "generating"
 
     async def shutdown(self) -> None:
+        self._unsubscribe_status()
         self._cancel_gap_task()
         self._cancel_prefetch("shutdown")
         for task in list(self._tasks):

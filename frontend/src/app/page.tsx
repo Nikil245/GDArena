@@ -18,6 +18,7 @@ import {
   useBackendStatus,
   WarmupBanner,
 } from "@/components/BackendStatusProvider";
+import { PreStartLimitNotice } from "@/components/ServiceStatusBanner";
 import { StyledSelect, type SelectOption } from "@/components/StyledSelect";
 import { ApiError, createRoom } from "@/lib/api";
 import type { TopicCategory } from "@/lib/types";
@@ -141,6 +142,7 @@ export default function HomePage() {
 
       <main className="app-container py-6 sm:py-10">
         <WarmupBanner />
+        <PreStartLimitNotice />
         <div className="mb-6 sm:mb-8">
           <h1 className="text-page-title font-semibold text-ink sm:text-[28px]">
             Group Discussion Practice

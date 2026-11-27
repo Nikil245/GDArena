@@ -121,6 +121,7 @@ def compute_leaderboard(
                 "is_ai": p.is_ai,
                 "turns": len(mine),
                 "scored_turns": len(scored),
+                "unscored_turns": len(mine) - len(scored),
                 "average": {
                     c: (round(mean(e.scores[c] for e in scored), 2) if scored else None)  # type: ignore[index]
                     for c in CRITERIA
@@ -201,6 +202,14 @@ def fallback_feedback(stats: dict[str, Any]) -> dict[str, Any]:
     """Heuristic feedback used when the LLM is unavailable."""
     avg = {k: v for k, v in stats["average"].items() if v is not None}
     if not avg:
+        if stats.get("turns", 0) > 0:
+            return {
+                "strengths": ["Participated actively in the discussion"],
+                "improvements": [],
+                "summary": (
+                    f"Contributed {stats['turns']} turn(s); automated scoring was unavailable during this session."
+                ),
+            }
         return no_contribution_feedback()
     ordered = sorted(avg, key=avg.get, reverse=True)  # type: ignore[arg-type]
     return {

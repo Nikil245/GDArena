@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowUpRight,
   Award,
   Bot,
@@ -55,6 +56,20 @@ export function ResultsView({
   const [showTranscript, setShowTranscript] = useState(false);
 
   const activeReport = report ?? fallbackReport;
+  const unscoredCount =
+    activeReport?.unscored_turns ??
+    transcript.filter(
+      (entry) =>
+        entry.turn_score === null &&
+        (entry.score_status === "not_scored" ||
+          Boolean(entry.score_reason) ||
+          Boolean(activeReport))
+    ).length;
+  const scoringNote =
+    activeReport?.scoring_note ??
+    (unscoredCount > 0
+      ? `${unscoredCount} of ${transcript.length} turn(s) were not scored because AI services reached their usage limit during this session.`
+      : null);
 
   // Fallback REST check if the report is still generating or page was refreshed
   useEffect(() => {
@@ -118,6 +133,21 @@ export function ResultsView({
           </div>
         </div>
       </section>
+
+      {/* Unscored turns note when AI usage limit occurred */}
+      {scoringNote && (
+        <section
+          role="status"
+          aria-live="polite"
+          className="flex items-start gap-2.5 rounded-card border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950"
+        >
+          <AlertTriangle
+            className="mt-0.5 h-4 w-4 shrink-0 text-amber-800"
+            strokeWidth={1.75}
+          />
+          <p className="leading-snug">{scoringNote}</p>
+        </section>
+      )}
 
       {/* Best performer or generating state */}
       {!activeReport && reportStatus !== "failed" && (
@@ -477,16 +507,20 @@ export function ResultsView({
                       )}
                       <span className="text-ink-muted">Turn #{entry.seq}</span>
                     </div>
-                    {entry.turn_score !== null && (
+                    {entry.turn_score !== null ? (
                       <span className="text-caption font-semibold text-accent-text tabular-nums">
                         {formatScore(entry.turn_score)} / 10
+                      </span>
+                    ) : (
+                      <span className="rounded-chip border border-line bg-muted px-2 py-0.5 text-[11px] font-medium text-ink-muted">
+                        Not scored
                       </span>
                     )}
                   </div>
                   <p className="mt-1.5 break-words text-sm text-ink-secondary">
                     {entry.text}
                   </p>
-                  {entry.comment && (
+                  {entry.turn_score !== null && entry.comment && (
                     <p className="mt-1 text-caption text-ink-muted">
                       Comment: {entry.comment}
                     </p>

@@ -10,15 +10,24 @@ Swappable via ``STT_PROVIDER`` in ``backend/.env``:
 from __future__ import annotations
 
 import logging
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Literal
 
 import httpx
+import openai
 from openai import AsyncOpenAI
 
 from ..config import Settings, get_settings
+from .service_status import (
+    STT_RATE_LIMITED_MESSAGE,
+    ServiceStatusTracker,
+    classify_provider_error,
+    get_service_status,
+    redact_secrets,
+)
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +48,19 @@ _MIME_TO_EXT: dict[str, tuple[str, str]] = {
 
 class STTError(Exception):
     pass
+
+
+class STTRateLimitError(STTError):
+    """Speech-to-text hit an upstream HTTP 429 rate limit."""
+
+    def __init__(
+        self,
+        message: str = STT_RATE_LIMITED_MESSAGE,
+        *,
+        retry_after_seconds: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.retry_after_seconds: int | None = retry_after_seconds
 
 
 class VoiceNotSupportedError(STTError):
@@ -101,10 +123,14 @@ class GroqWhisperSTT(SpeechToText):
         api_key: str,
         base_url: str,
         model: str = "whisper-large-v3-turbo",
+        fallback_model: str | None = None,
         timeout: float = 30.0,
         http_client: httpx.AsyncClient | None = None,
+        status_tracker: ServiceStatusTracker | None = None,
     ) -> None:
         self.model = model
+        self.fallback_model = fallback_model.strip() if fallback_model and fallback_model.strip() else None
+        self._status = status_tracker or get_service_status()
         self._client = AsyncOpenAI(
             api_key=api_key,
             base_url=base_url,
@@ -113,19 +139,124 @@ class GroqWhisperSTT(SpeechToText):
             http_client=http_client,
         )
 
+    def _candidate_models(self) -> list[str]:
+        models = [self.model]
+        if self.fallback_model and self.fallback_model != self.model:
+            models.append(self.fallback_model)
+        return models
+
     async def transcribe(self, audio: bytes, *, mime_type: str | None, language: str = "en") -> Transcription:
         if not audio:
             raise STTError("Audio recording is empty.")
         filename, clean_mime = _clean_mime_and_filename(mime_type)
-        try:
-            resp = await self._client.audio.transcriptions.create(
-                model=self.model,
-                file=(filename, audio, clean_mime),
-                language=language or "en",
-            )
-        except Exception as exc:
-            log.error("Whisper STT failed (model=%s, mime=%s): %s", self.model, clean_mime, exc, exc_info=True)
-            raise STTError(f"Transcription failed: {exc}") from exc
+        candidates = self._candidate_models()
+        resp: object | None = None
+        last_rate_limit: tuple[int | None, bool, object] | None = None
+
+        for idx, model_name in enumerate(candidates):
+            has_next = idx + 1 < len(candidates)
+            try:
+                resp = await self._client.audio.transcriptions.create(
+                    model=model_name,
+                    file=(filename, audio, clean_mime),
+                    language=language or "en",
+                )
+                self._status.record_stt_success()
+                break
+            except openai.RateLimitError as exc:
+                classified = classify_provider_error(exc)
+                safe_detail = redact_secrets(str(exc))
+                retry_secs = (
+                    math.ceil(classified.retry_after_seconds)
+                    if classified.retry_after_seconds is not None
+                    else None
+                )
+                log.warning(
+                    "Whisper STT 429 (model=%s, kind=%s, retry_after=%s, fallback_available=%s): %s",
+                    model_name,
+                    classified.kind,
+                    retry_secs,
+                    has_next,
+                    safe_detail,
+                )
+                last_rate_limit = (retry_secs, classified.kind == "quota_exhausted", classified.retry_at)
+                if has_next:
+                    continue
+                if classified.kind == "quota_exhausted":
+                    self._status.record_stt_quota_exhausted(classified.retry_at)
+                else:
+                    self._status.record_stt_degraded(classified.retry_at)
+                raise STTRateLimitError(
+                    STT_RATE_LIMITED_MESSAGE,
+                    retry_after_seconds=retry_secs,
+                ) from exc
+            except (openai.APITimeoutError, openai.APIConnectionError, openai.InternalServerError) as exc:
+                safe_detail = redact_secrets(str(exc))
+                log.error(
+                    "Whisper STT transient failure (model=%s, mime=%s, fallback_available=%s): %s",
+                    model_name,
+                    clean_mime,
+                    has_next,
+                    safe_detail,
+                )
+                self._status.record_stt_degraded()
+                if has_next:
+                    continue
+                raise STTError(
+                    "Speech recognition is temporarily unavailable. Please try again or use text input."
+                ) from exc
+            except Exception as exc:
+                classified = classify_provider_error(exc)
+                safe_detail = redact_secrets(str(exc))
+                if classified.kind in ("rate_limited_temporary", "quota_exhausted"):
+                    retry_secs = (
+                        math.ceil(classified.retry_after_seconds)
+                        if classified.retry_after_seconds is not None
+                        else None
+                    )
+                    log.warning(
+                        "Whisper STT 429 (model=%s, kind=%s, retry_after=%s, fallback_available=%s): %s",
+                        model_name,
+                        classified.kind,
+                        retry_secs,
+                        has_next,
+                        safe_detail,
+                    )
+                    if has_next:
+                        last_rate_limit = (retry_secs, classified.kind == "quota_exhausted", classified.retry_at)
+                        continue
+                    if classified.kind == "quota_exhausted":
+                        self._status.record_stt_quota_exhausted(classified.retry_at)
+                    else:
+                        self._status.record_stt_degraded(classified.retry_at)
+                    raise STTRateLimitError(
+                        STT_RATE_LIMITED_MESSAGE,
+                        retry_after_seconds=retry_secs,
+                    ) from exc
+                log.error(
+                    "Whisper STT failed (model=%s, mime=%s): %s",
+                    model_name,
+                    clean_mime,
+                    safe_detail,
+                )
+                if has_next and last_rate_limit is not None:
+                    continue
+                raise STTError(
+                    "Could not transcribe audio. Please try again or use text input."
+                ) from exc
+
+        if resp is None:
+            if last_rate_limit is not None:
+                retry_secs, is_quota, retry_at = last_rate_limit
+                if is_quota:
+                    self._status.record_stt_quota_exhausted(retry_at)  # type: ignore[arg-type]
+                else:
+                    self._status.record_stt_degraded(retry_at)  # type: ignore[arg-type]
+                raise STTRateLimitError(
+                    STT_RATE_LIMITED_MESSAGE,
+                    retry_after_seconds=retry_secs,
+                )
+            raise STTError("Could not transcribe audio. Please try again or use text input.")
 
         text = " ".join((getattr(resp, "text", "") or "").split())
         if not text:
@@ -195,6 +326,7 @@ def build_stt(settings: Settings) -> SpeechToText:
                 api_key=settings.api_key,
                 base_url=settings.llm_base_url,
                 model=settings.stt_model,
+                fallback_model=settings.stt_fallback_model,
             )
         if settings.llm_provider.strip().lower() == "mock":
             return MockSTT()

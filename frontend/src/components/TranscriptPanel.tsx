@@ -125,6 +125,13 @@ export function TranscriptPanel({
                     <span className="shrink-0 rounded-chip border border-accent-border bg-accent-soft px-2 py-0.5 text-[11px] font-semibold text-accent-text tabular-nums">
                       {formatScore(e.turn_score)} / 10
                     </span>
+                  ) : e.score_status === "not_scored" || e.score_reason ? (
+                    <span
+                      className="shrink-0 rounded-chip border border-line bg-muted px-2 py-0.5 text-[11px] font-medium text-ink-muted"
+                      title={e.score_reason ?? "Scoring unavailable"}
+                    >
+                      Not scored
+                    </span>
                   ) : (
                     <span className="shrink-0 text-[11px] text-ink-muted">
                       Scoring...

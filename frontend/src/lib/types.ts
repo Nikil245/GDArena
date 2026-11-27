@@ -19,6 +19,10 @@ export type EndReason = "timer" | "moderator" | "server_restart";
 
 export type ReportStatus = "generating" | "ready" | "failed" | null;
 
+export type ServiceHealthState = "ok" | "degraded" | "exhausted";
+
+export type TurnScoreStatus = "pending" | "scored" | "not_scored";
+
 export type SpeakerPhase = "thinking" | "speaking";
 
 export type TurnSource = "text" | "voice" | "ai";
@@ -127,6 +131,8 @@ export interface TranscriptEntry {
   scores: ScoreBreakdown | null;
   comment: string | null;
   turn_score: number | null;
+  score_status?: TurnScoreStatus;
+  score_reason?: string | null;
 }
 
 export interface LeaderboardRow {
@@ -136,6 +142,7 @@ export interface LeaderboardRow {
   is_ai: boolean;
   turns: number;
   scored_turns: number;
+  unscored_turns?: number;
   average: ScoreAverages;
   average_turn_score: number | null;
   adjustments: number;
@@ -158,6 +165,8 @@ export interface ParticipantReport {
   rank: number;
   total_score: number;
   turns: number;
+  scored_turns?: number;
+  unscored_turns?: number;
   average: ScoreAverages;
   average_turn_score: number | null;
   adjustments: number;
@@ -174,8 +183,18 @@ export interface FinalReport {
   ended_at: string | null;
   end_reason: EndReason | null;
   total_turns: number;
+  unscored_turns?: number;
+  scoring_note?: string | null;
   best_performer: BestPerformer | null;
   participants: ParticipantReport[];
+}
+
+export interface WsServiceStatusData {
+  service: "llm" | "stt";
+  state: ServiceHealthState;
+  retry_at: string | null;
+  message: string;
+  continue_without_ai?: boolean;
 }
 
 export interface RoomSnapshot {
@@ -188,6 +207,7 @@ export interface RoomSnapshot {
   leaderboard: LeaderboardRow[];
   report_status: ReportStatus;
   report: FinalReport | null;
+  service_status?: WsServiceStatusData;
 }
 
 // ---------------------------------------------------------------------------
@@ -235,6 +255,12 @@ export interface HealthResponse {
   tts_provider?: string;
   tts_model?: string | null;
   tts_accent_preference?: string;
+}
+
+export interface ServiceStatusResponse {
+  llm: ServiceHealthState;
+  stt: ServiceHealthState;
+  retry_at: string | null;
 }
 
 export interface SttResponse {
@@ -292,9 +318,11 @@ export interface WsTurnScoredData {
   seq: number;
   participant_id: number;
   name: string;
-  scores: ScoreBreakdown;
-  comment: string;
-  turn_score: number;
+  scores: ScoreBreakdown | null;
+  comment: string | null;
+  turn_score: number | null;
+  score_status?: TurnScoreStatus;
+  score_reason?: string | null;
 }
 
 export interface WsScoreAdjustedData {
@@ -356,6 +384,7 @@ export type ServerEvent =
   | { type: "gd_ended"; data: WsGdEndedData; ts: string }
   | { type: "report_ready"; data: WsReportReadyData; ts: string }
   | { type: "report_failed"; data: WsReportFailedData; ts: string }
+  | { type: "service_status"; data: WsServiceStatusData; ts: string }
   | { type: "error"; data: WsErrorData; ts: string };
 
 // ---------------------------------------------------------------------------

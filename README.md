@@ -30,6 +30,7 @@ The FastAPI backend acts as the single source of truth for room state, countdown
 - [Getting Started](#getting-started)
 - [Configuration](#configuration)
 - [Cold Starts on Render's Free Tier](#cold-starts-on-renders-free-tier)
+- [Usage-Limit Alerts (Groq LLM & Whisper)](#usage-limit-alerts-groq-llm--whisper)
 - [API Overview](#api-overview)
 - [Running Tests](#running-tests)
 - [Troubleshooting](#troubleshooting)
@@ -378,8 +379,11 @@ Open `http://localhost:3000` in your browser.
 | `LLM_BACKOFF_MAX_SECONDS` | Maximum backoff delay | `30.0` | No |
 | `LLM_MAX_CONCURRENCY` | Max concurrent LLM requests | `4` | No |
 | `DATABASE_URL` | SQLAlchemy/SQLModel database URL | `sqlite:///.../backend/gd_arena.db` | No |
+| `ENVIRONMENT` | Runtime environment (`development`, `staging`, `production`) | `development` | No |
 | `CORS_ORIGINS` | Comma-separated allowed CORS origins | `*` | No |
 | `LOG_LEVEL` | Python logging level | `INFO` | No |
+| `SIMULATE_LLM_EXHAUSTED` | Dev test switch: `off`, `exhausted` (`retry_at` +5m), or `recover` (recovers 60s after room start); ignored in `production` unless explicitly allowed | `off` | No |
+| `ALLOW_SIMULATE_IN_PRODUCTION` | Explicit opt-in allowing `SIMULATE_LLM_EXHAUSTED` when `ENVIRONMENT=production` | `false` | No |
 | `AI_SPEAKING_WPM` | Fallback AI floor-hold rate in words/minute when TTS audio duration is unavailable (`0` disables hold) | `150` | No |
 | `AI_GENERATION_TIMEOUT_SECONDS` | Timeout for AI turn text generation | `45.0` | No |
 | `AI_HAND_RAISE_MULTIPLIER` | Multiplier on per-second AI hand-raise probability | `1.0` | No |
@@ -453,6 +457,18 @@ This delays the initial `/health` check and the first API request across a ~20-s
 
 ---
 
+## Usage-Limit Alerts (Groq LLM & Whisper)
+
+Groq's free tier enforces per-minute and daily token/request quotas (`HTTP 429`). When a quota limit is reached, GDArena tracks provider availability in memory and surfaces clear, secret-free notices instead of letting AI participants go silently quiet:
+
+- **Cheap status endpoint (`GET /status`)**: Returns `{"llm": "ok|degraded|exhausted", "stt": "ok|degraded|exhausted", "retry_at": "<ISO>" | null}` with zero provider calls and zero secrets. Setup and Join pages check `/status` once the backend is awake and show a non-blocking notice above the form if the LLM limit is active.
+- **In-room alert & graceful human-only fallback**: When LLM quota is exhausted mid-session, the backend broadcasts a `service_status` event to running rooms, drops queued AI turns, stops AI hand-raising (preventing retry loops), and cleanly releases any active AI turn. The room displays a persistent amber banner with an approximate resume countdown (when Groq provides one), AI seats display **Paused**, and moderators/hosts can choose **Continue without AI** (`continue_without_ai`) to collapse the banner into a slim bar or **End session**.
+- **Unscored turns & automatic recovery**: Turns spoken while the LLM is exhausted are marked **Not scored** (`score_status: "not_scored"`, `score_reason: "scoring unavailable"`) without blocking the floor; the leaderboard and final report handle null scores cleanly and note unscored turns. Once `retry_at` passes and a probe succeeds (or a call succeeds), the backend broadcasts `service_status` `ok`, hides the banner, shows a 5-second **"AI participants are back"** notice, and resumes AI turns automatically.
+- **Whisper STT rate limits**: `POST /stt` tries `STT_FALLBACK_MODEL` (`whisper-large-v3`) before failing and returns `HTTP 429` (`code: "stt_rate_limited"`, optional `retry_after_seconds`) rather than `500`. The microphone area shows a clear retry message and a quick **Use text instead** switch without losing the player's turn.
+- **Testing locally with `SIMULATE_LLM_EXHAUSTED`**: Set `SIMULATE_LLM_EXHAUSTED=exhausted` (stays exhausted with `retry_at` 5 minutes ahead) or `SIMULATE_LLM_EXHAUSTED=recover` (starts exhausted and recovers 60 seconds after a room starts) in `backend/.env`. Ignored when `ENVIRONMENT=production` unless `ALLOW_SIMULATE_IN_PRODUCTION=true`.
+
+---
+
 ## API Overview
 
 Full request/response schemas and WebSocket payloads are documented in [`backend/API_CONTRACT.md`](backend/API_CONTRACT.md).
@@ -462,6 +478,7 @@ Full request/response schemas and WebSocket payloads are documented in [`backend
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/health` | Server health and active LLM, STT, and TTS providers |
+| `GET` | `/status` | Cheap in-memory `llm` and `stt` availability (`ok`, `degraded`, `exhausted`) and optional `retry_at` |
 | `GET` | `/topics` | List built-in GD topics (filterable by `category`) |
 | `GET` | `/personas` | List available AI personas and voices |
 | `POST` | `/rooms` | Create a room and receive a 6-character room code |
@@ -478,8 +495,8 @@ Full request/response schemas and WebSocket payloads are documented in [`backend
 
 | Direction | Message Types |
 |---|---|
-| Client -> Server | `ping`, `get_state`, `start_gd`, `end_gd`, `raise_hand`, `lower_hand`, `submit_turn`, `yield_turn`, `grant_turn`, `skip_speaker`, `adjust_score`, `playback_ended` |
-| Server -> Client | `welcome`, `state`, `pong`, `participants`, `gd_started`, `timer`, `queue`, `speaker_changed`, `transcript_entry`, `turn_skipped`, `turn_scored`, `score_adjusted`, `leaderboard`, `gd_ended`, `report_ready`, `report_failed`, `error` |
+| Client -> Server | `ping`, `get_state`, `start_gd`, `end_gd`, `continue_without_ai`, `raise_hand`, `lower_hand`, `submit_turn`, `yield_turn`, `grant_turn`, `skip_speaker`, `adjust_score`, `playback_ended` |
+| Server -> Client | `welcome`, `state`, `pong`, `participants`, `gd_started`, `timer`, `queue`, `speaker_changed`, `transcript_entry`, `turn_skipped`, `turn_scored`, `score_adjusted`, `leaderboard`, `gd_ended`, `report_ready`, `report_failed`, `service_status`, `error` |
 
 ---
 
@@ -535,7 +552,9 @@ npm run build
 - **Microphone permission issues**
   - Ensure your browser has granted microphone permission for `http://localhost:3000` (or HTTPS when deployed remotely) and that an input device is connected. If microphone access is denied or unavailable, click **"Use text instead"** in Floor Controls to submit typed turns.
 - **Speech-to-text failing or rate limited**
-  - Groq Whisper enforces free-tier rate and audio quotas (`429`). If you hit rate limits or want offline transcription, implement the `FasterWhisperSTT` stub in `backend/app/services/stt.py` and set `STT_PROVIDER=faster_whisper`, or use the `"Use text instead"` link below the microphone button.
+  - Groq Whisper enforces free-tier rate and audio quotas (`429`). When `POST /stt` hits a `429`, the backend automatically tries `STT_FALLBACK_MODEL` (`whisper-large-v3`) before returning `429` (`stt_rate_limited`), and the room shows a retry notice near the mic without dropping your turn. You can retry recording or switch to **"Use text instead"** at any time.
+- **Groq LLM daily token or request limit reached (`429` TPD/RPD)**
+  - When Groq returns a daily quota `429` (or a retry window longer than 60 seconds), GDArena marks `llm` as `exhausted`, pauses AI participants cleanly (no background retry loop), marks human turns as **Not scored**, and displays an in-room banner with an estimated resume time. Moderators can click **Continue without AI** or **End session**. AI participants resume automatically once the limit resets. To test this flow without exhausting your real quota, set `SIMULATE_LLM_EXHAUSTED=exhausted` or `SIMULATE_LLM_EXHAUSTED=recover` in `backend/.env`.
 
 ---
 

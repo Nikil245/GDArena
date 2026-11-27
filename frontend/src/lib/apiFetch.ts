@@ -29,6 +29,8 @@ export interface ApiFetchOptions {
   actionKey?: string;
   /** Optional override for how long a pending request waits before entering waking state. */
   slowRequestMs?: number;
+  /** When true, this background probe will never transition backend status to waking or open the overlay. */
+  suppressWaking?: boolean;
 }
 
 export class RequestInFlightError extends Error {
@@ -620,10 +622,12 @@ export function createBackendMonitor(
     init?: RequestInit,
     options: ApiFetchOptions = {}
   ): Promise<Response> => {
-    const showOverlay = options.showOverlay ?? true;
+    const showOverlay = options.suppressWaking ? false : (options.showOverlay ?? true);
+    const suppressWaking = Boolean(options.suppressWaking);
     const method = (init?.method ?? "GET").toUpperCase();
-    const retryOnWake =
-      options.retryOnWake ?? (method === "GET" || method === "HEAD");
+    const retryOnWake = suppressWaking
+      ? false
+      : (options.retryOnWake ?? (method === "GET" || method === "HEAD"));
     const actionKey = options.actionKey;
 
     if (actionKey) {
@@ -651,7 +655,7 @@ export function createBackendMonitor(
             : reqSlowMs;
 
         let slowTimerId: ReturnType<typeof setTimeout> | null = null;
-        if (!isRetry) {
+        if (!isRetry && !suppressWaking) {
           slowTimerId = setTimeout(() => {
             slowTimerId = null;
             startWaking(showOverlay);
@@ -690,14 +694,16 @@ export function createBackendMonitor(
           return response;
         }
 
-        // Network/CORS-like failure or 502/503/504 -> waking state
-        startWaking(showOverlay, snapshot.status === "failed");
-        if (
-          isHealthEndpoint &&
-          response !== null &&
-          snapshot.checkPhase === "contacting"
-        ) {
-          emit({ checkPhase: "responded" });
+        // Network/CORS-like failure or 502/503/504 -> waking state (unless suppressed)
+        if (!suppressWaking) {
+          startWaking(showOverlay, snapshot.status === "failed");
+          if (
+            isHealthEndpoint &&
+            response !== null &&
+            snapshot.checkPhase === "contacting"
+          ) {
+            emit({ checkPhase: "responded" });
+          }
         }
 
         if (retryOnWake && !isRetry) {

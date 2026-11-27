@@ -10,6 +10,7 @@ import {
 } from "react";
 import {
   AlertCircle,
+  AlertTriangle,
   Hand,
   Loader2,
   Mic,
@@ -20,6 +21,7 @@ import {
 import { ApiError, transcribeAudio } from "@/lib/api";
 import { connectMicStream } from "@/lib/audioLevel";
 import { formatSeconds } from "@/lib/format";
+import { formatSttRateLimitMessage } from "@/lib/serviceStatus";
 import { unlockAudio } from "@/lib/speech";
 import type { Participant, QueueItem, Speaker } from "@/lib/types";
 
@@ -68,6 +70,7 @@ export function TurnControls({
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [transcribing, setTranscribing] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [voiceRateLimited, setVoiceRateLimited] = useState(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -127,6 +130,14 @@ export function TurnControls({
     };
   }, [stopStreamTracks]);
 
+  // Clear stale voice errors when turn ends
+  useEffect(() => {
+    if (!isMyTurn) {
+      setVoiceError(null);
+      setVoiceRateLimited(false);
+    }
+  }, [isMyTurn]);
+
   // Abort recording cleanly if the floor leaves this player (e.g. skipped or GD ended)
   useEffect(() => {
     if (!isMyTurn && recording) {
@@ -172,6 +183,7 @@ export function TurnControls({
     if (!isMyTurn || disabled || transcribing || recording) return;
     unlockAudio();
     setVoiceError(null);
+    setVoiceRateLimited(false);
 
     if (
       typeof navigator === "undefined" ||
@@ -251,6 +263,7 @@ export function TurnControls({
 
       setTranscribing(true);
       setVoiceError(null);
+      setVoiceRateLimited(false);
       try {
         const res = await transcribeAudio(blob, "en");
         const cleaned = res.text.trim();
@@ -260,9 +273,14 @@ export function TurnControls({
         }
         onSubmitTurn(cleaned, "voice");
       } catch (err) {
-        if (err instanceof ApiError) {
+        if (err instanceof ApiError && err.code === "stt_rate_limited") {
+          setVoiceRateLimited(true);
+          setVoiceError(formatSttRateLimitMessage(err.retryAfterSeconds));
+        } else if (err instanceof ApiError) {
+          setVoiceRateLimited(false);
           setVoiceError(err.message);
         } else {
+          setVoiceRateLimited(false);
           setVoiceError("Transcription failed. Please try again.");
         }
       } finally {
@@ -381,14 +399,41 @@ export function TurnControls({
 
       {voiceError && (
         <div
-          role="alert"
-          className="mb-3 flex items-start gap-2 rounded-control border border-danger-border bg-danger-bg px-3 py-2 text-caption text-danger-text"
+          role={voiceRateLimited ? "status" : "alert"}
+          aria-live="polite"
+          className={`mb-3 flex flex-wrap items-start justify-between gap-2 rounded-control border px-3 py-2 text-caption ${
+            voiceRateLimited
+              ? "border-amber-300 bg-amber-50 text-amber-950"
+              : "border-danger-border bg-danger-bg text-danger-text"
+          }`}
         >
-          <AlertCircle
-            className="mt-0.5 h-3.5 w-3.5 shrink-0"
-            strokeWidth={1.75}
-          />
-          <span>{voiceError}</span>
+          <div className="flex min-w-0 items-start gap-2">
+            {voiceRateLimited ? (
+              <AlertTriangle
+                className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-800"
+                strokeWidth={1.75}
+              />
+            ) : (
+              <AlertCircle
+                className="mt-0.5 h-3.5 w-3.5 shrink-0"
+                strokeWidth={1.75}
+              />
+            )}
+            <span>{voiceError}</span>
+          </div>
+          {voiceRateLimited && !textMode && (
+            <button
+              type="button"
+              onClick={() => {
+                setVoiceError(null);
+                setVoiceRateLimited(false);
+                setTextMode(true);
+              }}
+              className="ui-focus shrink-0 rounded-chip text-caption font-semibold text-amber-950 underline underline-offset-2 hover:text-ink"
+            >
+              Use text instead
+            </button>
+          )}
         </div>
       )}
 

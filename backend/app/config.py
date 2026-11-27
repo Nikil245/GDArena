@@ -33,9 +33,15 @@ class Settings(BaseSettings):
     llm_max_concurrency: int = 4
 
     # ---- App ----
+    environment: str = "development"  # development | staging | production
     database_url: str = f"sqlite:///{BACKEND_DIR / 'gd_arena.db'}"
     cors_origins: str = "*"
     log_level: str = "INFO"
+
+    # ---- Testing / simulation ----
+    # off | exhausted (retry_at +5m) | recover (exhausted, then auto-recovers after 60s)
+    simulate_llm_exhausted: str = "off"
+    allow_simulate_in_production: bool = False
 
     # ---- GD behaviour ----
     # Simulated speaking time for AI turns (words per minute). 150 WPM ~= 2.5 words/sec.

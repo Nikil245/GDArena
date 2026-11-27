@@ -32,6 +32,7 @@ interface RoundTableProps {
   currentSpeaker: Speaker | null;
   ttsSpeakingParticipantId?: number | null;
   isHumanRecording?: boolean;
+  aiPaused?: boolean;
   queue: QueueItem[];
   youId: number | null;
 }
@@ -42,6 +43,7 @@ export function RoundTable({
   currentSpeaker,
   ttsSpeakingParticipantId = null,
   isHumanRecording = false,
+  aiPaused = false,
   queue,
   youId,
 }: RoundTableProps) {
@@ -96,6 +98,7 @@ export function RoundTable({
       participants={participants}
       currentSpeaker={currentSpeaker}
       ttsSpeakingParticipantId={ttsSpeakingParticipantId}
+      aiPaused={aiPaused}
       queue={queue}
       youId={youId}
     />
@@ -186,6 +189,7 @@ export function RoundTable({
             currentSpeaker={currentSpeaker}
             ttsSpeakingParticipantId={ttsSpeakingParticipantId}
             isHumanRecording={isHumanRecording}
+            aiPaused={aiPaused}
             queue={queue}
             youId={youId}
             isCompact={isCompact}

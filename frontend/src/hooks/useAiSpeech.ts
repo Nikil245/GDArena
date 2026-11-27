@@ -32,6 +32,7 @@ export interface UseAiSpeechOptions {
   roomStatus: RoomStatus | undefined;
   welcomeCount: number;
   isHumanRecording: boolean;
+  aiPaused?: boolean;
   onPlaybackEnded?: (turnId: number) => void;
 }
 
@@ -60,6 +61,7 @@ export function useAiSpeech({
   roomStatus,
   welcomeCount,
   isHumanRecording,
+  aiPaused = false,
   onPlaybackEnded,
 }: UseAiSpeechOptions): UseAiSpeechResult {
   const [muted, setMuted] = useState(false);
@@ -79,6 +81,7 @@ export function useAiSpeech({
   const mutedRef = useRef(muted);
   const roomStatusRef = useRef(roomStatus);
   const humanRecordingRef = useRef(isHumanRecording);
+  const aiPausedRef = useRef(aiPaused);
   const onPlaybackEndedRef = useRef(onPlaybackEnded);
   const lastWelcomeCountRef = useRef<number>(0);
   const lastProcessedTurnIdRef = useRef<number>(0);
@@ -88,6 +91,7 @@ export function useAiSpeech({
   mutedRef.current = muted;
   roomStatusRef.current = roomStatus;
   humanRecordingRef.current = isHumanRecording;
+  aiPausedRef.current = aiPaused;
   onPlaybackEndedRef.current = onPlaybackEnded;
 
   const disconnectAiAnalyser = useCallback(() => {
@@ -212,6 +216,7 @@ export function useAiSpeech({
     if (
       playingRef.current ||
       mutedRef.current ||
+      aiPausedRef.current ||
       roomStatusRef.current !== "running" ||
       humanRecordingRef.current
     ) {
@@ -249,6 +254,7 @@ export function useAiSpeech({
 
       if (
         mutedRef.current ||
+        aiPausedRef.current ||
         roomStatusRef.current !== "running" ||
         humanRecordingRef.current
       ) {
@@ -373,12 +379,12 @@ export function useAiSpeech({
     }
   }, [isHumanRecording, stopActivePlayback]);
 
-  // Stop audio when muted or session finishes
+  // Stop audio cleanly when muted, AI services are paused, or session finishes
   useEffect(() => {
-    if (muted || roomStatus === "finished") {
+    if (muted || aiPaused || roomStatus === "finished") {
       stopActivePlayback(true);
     }
-  }, [muted, roomStatus, stopActivePlayback]);
+  }, [muted, aiPaused, roomStatus, stopActivePlayback]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -405,7 +411,7 @@ export function useAiSpeech({
 
     lastProcessedTurnIdRef.current = newEntries[newEntries.length - 1].turn_id;
 
-    if (muted || roomStatus !== "running") {
+    if (muted || aiPaused || roomStatus !== "running") {
       return;
     }
 
@@ -454,7 +460,7 @@ export function useAiSpeech({
     }
 
     playNext();
-  }, [transcript, participants, roomStatus, welcomeCount, muted, playNext]);
+  }, [transcript, participants, roomStatus, welcomeCount, muted, aiPaused, playNext]);
 
   const enableAudio = useCallback(() => {
     unlockAudio();

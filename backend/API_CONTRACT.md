@@ -134,11 +134,14 @@ Request schema validation errors return FastAPI's standard `422 Unprocessable En
     "teamwork": 7
   },
   "comment": "Clear stance; add one real-world example next time.",
-  "turn_score": 7.5
+  "turn_score": 7.5,
+  "score_status": "scored",
+  "score_reason": null
 }
 ```
 - `source`: `"text" | "voice" | "ai"`
-- `scores`, `comment`, `turn_score`: initially `null` when the entry is broadcast, then filled asynchronously when `turn_scored` arrives. `turn_score` is the mean of the 4 criteria (`0..10`).
+- `scores`, `comment`, `turn_score`: initially `null` when the entry is broadcast (`score_status: "pending"`), then filled asynchronously when `turn_scored` arrives. `turn_score` is the mean of the 4 criteria (`0..10`).
+- `score_status`: `"pending" | "scored" | "not_scored"`. When AI scoring is unavailable (e.g., LLM usage limit exhausted), `turn_score` and `scores` stay `null`, `score_status` becomes `"not_scored"`, and `score_reason` is `"scoring unavailable"`.
 
 ### `LeaderboardRow`
 ```json
@@ -173,10 +176,18 @@ Request schema validation errors return FastAPI's standard `422 Unprocessable En
   "transcript": [ "...TranscriptEntry..." ],
   "leaderboard": [ "...LeaderboardRow..." ],
   "report_status": null,
-  "report": null
+  "report": null,
+  "service_status": {
+    "service": "llm",
+    "state": "ok",
+    "retry_at": null,
+    "message": "AI participants are back.",
+    "continue_without_ai": false
+  }
 }
 ```
 - `report_status`: `null | "generating" | "ready" | "failed"`
+- `service_status`: current in-memory LLM availability (`state`: `"ok" | "degraded" | "exhausted"`) and whether the moderator has selected `continue_without_ai`.
 
 ### `FinalReport`
 ```json
@@ -188,6 +199,8 @@ Request schema validation errors return FastAPI's standard `422 Unprocessable En
   "ended_at": "2026-11-25T07:10:00.000Z",
   "end_reason": "timer",
   "total_turns": 12,
+  "unscored_turns": 0,
+  "scoring_note": null,
   "best_performer": {
     "participant_id": 1,
     "name": "Asha",
@@ -244,6 +257,22 @@ Server health and active provider info.
 
 ---
 
+### `GET /status`
+Cheap, in-memory health/quota state for the LLM and STT providers. Makes no upstream API calls, works when the LLM is down, and never exposes API keys, organization IDs, or raw provider errors.
+
+- **200 OK:**
+```json
+{
+  "llm": "ok",
+  "stt": "ok",
+  "retry_at": null
+}
+```
+- `llm`, `stt`: `"ok" | "degraded" | "exhausted"`
+- `retry_at`: ISO-8601 UTC string when the provider reported an estimated retry time, or `null`.
+
+---
+
 ### `GET /audio/{room_code}/{turn_id}.{ext}`
 Serve the synthesized WAV (`.wav`) or MP3 (`.mp3`) clip for an AI turn.
 
@@ -289,6 +318,14 @@ Transcribe a recorded audio turn (`multipart/form-data`).
 - **Errors:**
   - `400` `empty_audio` | `voice_not_supported` | `stt_error`
   - `413` `audio_too_large`
+  - `429` rate limit (after trying `STT_FALLBACK_MODEL` if configured):
+    ```json
+    {
+      "code": "stt_rate_limited",
+      "retry_after_seconds": 15,
+      "message": "Speech recognition is busy right now. Please try again in a moment."
+    }
+    ```
 
 ---
 
@@ -468,6 +505,7 @@ Before closing on auth/lookup failure, the server sends one `error` event:
 | `skip_speaker` | Moderator / Host | — | Ends the active speaker's turn (`turn_skipped` with `reason: "moderator_skip"`) and advances. |
 | `adjust_score` | Moderator / Host (running) | `participant_id`, `delta` (`-10..10`, non-zero), `reason?` | Adds or subtracts points and updates the leaderboard. |
 | `playback_ended` | Any connected participant | `turn_id` | Notifies the server that client audio playback finished so the floor can advance after `TURN_GAP_SECONDS`. |
+| `continue_without_ai` | Moderator / Host (running) | — | Keeps the session running with humans only while AI participants are paused; broadcasts updated `service_status`. |
 
 **Voice-ready `submit_turn` example (stage 1 text vs. stage 2 audio):**
 ```json
@@ -494,14 +532,15 @@ In stage 1 (`STT_PROVIDER=text`), sending `audio_b64` without `text` returns an 
 | `speaker_changed` | Broadcast | `{ "speaker": Speaker \| null }` | Floor granted, AI phase changes `thinking -> speaking`, or floor released. |
 | `transcript_entry` | Broadcast | `TranscriptEntry` | A human or AI finishes submitting a turn (scores start as `null`). |
 | `turn_skipped` | Broadcast | `{ "participant_id", "name", "seq", "reason" }` | Turn ended without text (`yielded`, `time_up`, `disconnected`, `moderator_skip`, `ai_error`). |
-| `turn_scored` | Broadcast | `{ "turn_id", "seq", "participant_id", "name", "scores", "comment", "turn_score" }` | Async LLM scoring finishes for a turn. |
+| `turn_scored` | Broadcast | `{ "turn_id", "seq", "participant_id", "name", "scores", "comment", "turn_score", "score_status", "score_reason" }` | Async LLM scoring finishes (or marks `score_status: "not_scored"` when scoring is unavailable). |
 | `score_adjusted` | Broadcast | `{ "participant_id", "name", "delta", "reason", "by": { "participant_id", "name" }, "created_at" }` | Moderator adjusted a player's score. |
 | `leaderboard` | Broadcast | `{ "leaderboard": LeaderboardRow[] }` | After every `turn_scored` and `score_adjusted`. |
 | `gd_ended` | Broadcast | `{ "reason", "ended_at", "elapsed_seconds", "leaderboard" }` | Transition `running -> finished`. |
 | `report_ready` | Broadcast | `{ "report": FinalReport }` | Async final report finishes generating. |
 | `report_failed` | Broadcast | `{ "message": string }` | Report generation failed unexpectedly. |
+| `service_status` | Broadcast | `{ "service": "llm", "state": "ok" \| "degraded" \| "exhausted", "retry_at": string \| null, "message": string, "continue_without_ai": boolean }` | Sent to all running rooms when LLM quota becomes exhausted, when a moderator sends `continue_without_ai`, and when the LLM recovers. |
 | `error` | Unicast | `{ "code", "message", "request_type"?, "request_id"? }` | Invalid message, permission failure, or state conflict. |
 
 ### Common WebSocket Error Codes
-`room_not_found`, `invalid_token`, `spectator_read_only`, `invalid_message`, `message_too_large`, `unknown_type`, `not_moderator`, `not_player`, `invalid_state`, `not_enough_participants`, `already_queued`, `already_speaking`, `not_your_turn`, `empty_turn`, `invalid_turn`, `voice_not_supported`, `floor_busy`, `no_speaker`, `not_found`, `internal_error`.
+`room_not_found`, `invalid_token`, `spectator_read_only`, `invalid_message`, `message_too_large`, `unknown_type`, `not_moderator`, `not_player`, `invalid_state`, `not_enough_participants`, `already_queued`, `already_speaking`, `not_your_turn`, `empty_turn`, `invalid_turn`, `voice_not_supported`, `stt_rate_limited`, `ai_paused`, `floor_busy`, `no_speaker`, `not_found`, `internal_error`.
 

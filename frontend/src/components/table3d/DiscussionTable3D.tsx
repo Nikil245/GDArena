@@ -18,6 +18,7 @@ export interface DiscussionTable3DProps {
   currentSpeaker: Speaker | null;
   ttsSpeakingParticipantId?: number | null;
   isHumanRecording?: boolean;
+  aiPaused?: boolean;
   queue: QueueItem[];
   youId: number | null;
   isCompact?: boolean;
@@ -30,6 +31,7 @@ export function DiscussionTable3D({
   currentSpeaker,
   ttsSpeakingParticipantId = null,
   isHumanRecording = false,
+  aiPaused = false,
   queue,
   youId,
   isCompact = false,
@@ -126,12 +128,16 @@ export function DiscussionTable3D({
         };
       }
 
+      const isPausedAi = participant.is_ai && aiPaused;
       const isThinking = Boolean(
-        currentSpeaker?.participant_id === participant.id &&
+        !isPausedAi &&
+          currentSpeaker?.participant_id === participant.id &&
           currentSpeaker.phase === "thinking"
       );
       const isSpeaking = Boolean(
-        participant.is_ai
+        isPausedAi
+          ? false
+          : participant.is_ai
           ? ttsSpeakingParticipantId === participant.id
           : currentSpeaker?.participant_id === participant.id
       );
@@ -143,7 +149,8 @@ export function DiscussionTable3D({
         isYou: youId !== null && participant.id === youId,
         isSpeaking,
         isThinking,
-        queuePosition: queuePosition.get(participant.id) ?? null,
+        aiPaused: isPausedAi,
+        queuePosition: isPausedAi ? null : (queuePosition.get(participant.id) ?? null),
       };
     });
 
@@ -155,6 +162,7 @@ export function DiscussionTable3D({
         isYou: youId !== null && moderator.id === youId,
         isSpeaking: currentSpeaker?.participant_id === moderator.id,
         isThinking: false,
+        aiPaused: false,
         queuePosition: queuePosition.get(moderator.id) ?? null,
       });
     }
@@ -167,6 +175,7 @@ export function DiscussionTable3D({
     room.fill_with_ai,
     currentSpeaker,
     ttsSpeakingParticipantId,
+    aiPaused,
     queuePosition,
     youId,
   ]);
@@ -177,7 +186,7 @@ export function DiscussionTable3D({
     if (room.status === "lobby") {
       return `Lobby · ${playersCount}/${room.max_participants} seats`;
     }
-    if (ttsSpeakingParticipantId !== null) {
+    if (ttsSpeakingParticipantId !== null && !aiPaused) {
       const ttsSpeaker = participants.find(
         (p) => p.id === ttsSpeakingParticipantId
       );
@@ -185,18 +194,21 @@ export function DiscussionTable3D({
         return `Speaking · ${ttsSpeaker.name}`;
       }
     }
-    if (currentSpeaker) {
+    if (currentSpeaker && !(currentSpeaker.is_ai && aiPaused)) {
       return currentSpeaker.phase === "thinking"
         ? `Preparing point · ${currentSpeaker.name}`
         : `Speaking · ${currentSpeaker.name}`;
     }
-    return "Floor open · No active speaker";
+    return aiPaused
+      ? "AI participants paused · Floor open"
+      : "Floor open · No active speaker";
   }, [
     room.status,
     room.max_participants,
     playersCount,
     participants,
     ttsSpeakingParticipantId,
+    aiPaused,
     currentSpeaker,
   ]);
 

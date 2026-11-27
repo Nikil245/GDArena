@@ -18,6 +18,7 @@ import {
   useBackendStatus,
   WarmupBanner,
 } from "@/components/BackendStatusProvider";
+import { PreStartLimitNotice } from "@/components/ServiceStatusBanner";
 import { MicCheck } from "@/components/join/MicCheck";
 import { TablePreview } from "@/components/join/TablePreview";
 import { TipsCard } from "@/components/join/TipsCard";
@@ -174,6 +175,7 @@ function JoinRoomContent() {
   return (
     <main className="app-container py-6 sm:py-10">
       <WarmupBanner />
+      <PreStartLimitNotice />
       {isNewlyCreated && initialCode && (
         <div
           role="status"
